@@ -54,9 +54,10 @@ def normalize_provider(value: str) -> str | None:
 def trusted_url(value: str, domains: set[str]) -> bool:
     try:
         parsed = urlparse(value)
+        port = parsed.port
     except ValueError:
         return False
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.port:
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or port:
         return False
     host = parsed.hostname.lower().rstrip(".")
     if not any(host == domain or host.endswith("." + domain) for domain in domains):
