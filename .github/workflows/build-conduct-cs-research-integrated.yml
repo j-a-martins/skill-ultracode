@@ -1,9 +1,9 @@
-name: Build integrated conduct-cs-research release
+name: Build final-audited conduct-cs-research release
 
 on:
   push:
     branches:
-      - artifact/conduct-cs-research-integrated-20260830
+      - artifact/conduct-cs-research-final-audit-20260830
   workflow_dispatch:
 
 permissions:
@@ -12,9 +12,9 @@ permissions:
 jobs:
   validate-and-package:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Check out build branch
+      - name: Check out final-audit branch
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up Python
@@ -22,13 +22,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Run validation, adversarial tests, overengineering checks, and packaging
-        run: python deliverables/conduct-cs-research-integrated-2026-08-30/tools/release.py
+      - name: Run final validation, adversarial tests, overengineering checks, and packaging
+        run: python deliverables/conduct-cs-research-integrated-2026-08-30/tools/final_release.py
 
-      - name: Upload release evidence
+      - name: Upload certified release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: conduct-cs-research-integrated-2026-08-30
+          name: conduct-cs-research-final-audited-2026-08-30
           path: deliverables/conduct-cs-research-integrated-2026-08-30/release/*
           if-no-files-found: error
           retention-days: 30
