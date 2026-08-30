@@ -1,133 +1,140 @@
-# Journal selection and Q1 verification
+# Journal selection, Q1 evidence, and portfolio decisions
 
 ## Contents
 
-1. Separate fit from quartile
-2. Candidate discovery
-3. Fit assessment
-4. Q1 evidence record
-5. Policy and practical checks
-6. Portfolio decision
-7. Reverification
+1. Separate fit from ranking
+2. Build the candidate set
+3. Verify current journal facts
+4. Record Q1 evidence without overclaiming
+5. Score fit and choose a destination
+6. Check integrity and operational constraints
+7. Plan a portfolio
 8. Failure modes
 
-## Separate fit from quartile
+## Separate fit from ranking
 
-Treat scientific fit and Q1 status as independent variables. A verified Q1 journal may be unsuitable for the paper's contribution, methods, audience, or article type. A strong-fit journal may not be Q1 under the chosen provider, year, and category.
+Treat journal selection as a scientific and operational decision. Do not use quartile, impact factor, or prestige as a substitute for scope, methods, audience, article type, editorial practice, and reproducibility fit.
 
-Never describe a journal as simply `Q1` without the provider, metric year, and exact subject category. Quartile is not a permanent scalar property of a title.
+Maintain two distinct judgments:
 
-## Candidate discovery
+- **scientific fit** — whether the journal publishes this contribution, study family, article type, and level of evidence;
+- **ranking evidence** — whether an identified provider, metric year, and exact subject category place the journal in Q1.
 
-Build candidates from:
+A poor-fit Q1 journal remains a poor choice. A strong-fit journal without a complete Q1 evidence record must not be represented as verified Q1.
 
-- journals publishing the nearest comparable work;
-- journals cited by and citing the relevant evidence base;
-- official society and publisher portfolios;
-- target audiences and communities;
-- appropriate article types;
-- current indexing and metric-provider records;
-- funder, institution, licensing, and open-access constraints.
+## Build the candidate set
 
-Exclude journals with a scope mismatch, unverifiable identity, deceptive practices, or policies incompatible with the study.
+Generate a bounded candidate set from:
 
-## Fit assessment
+- journals publishing the nearest prior work;
+- journals explicitly covering the contribution and method;
+- journals serving the intended audience;
+- journals accepting the required article type and manuscript scale;
+- journals whose data, code, ethics, reporting, and artifact policies the project can meet;
+- legitimate alternatives for different contribution framings.
 
-Assess each candidate on a transparent scale, normally 0 to 5, for:
+Do not recommend a journal solely because its title contains a keyword or because it appears on an unverified list. Check recent relevant articles and current scope.
 
-- scope and contribution fit;
-- methodological fit;
-- audience fit;
-- article-type fit;
-- precedent for similar work;
-- open-science and artifact fit;
-- length and format feasibility;
-- review model and timeline when material;
-- policy compatibility;
-- cost and licensing constraints.
+## Verify current journal facts
 
-Scores support comparison; they do not predict acceptance. Explain the evidence behind high-impact differences rather than relying on arithmetic alone.
+Use current official journal, publisher, indexing-provider, and submission-system sources. Record the access date. Verify at least:
 
-## Q1 evidence record
+- exact title, ISSN, publisher, and official journal page;
+- scope, exclusions, article types, and recent relevant content;
+- manuscript, abstract, figure, table, reference, and supplementary limits;
+- peer-review and anonymity model;
+- data, code, materials, ethics, consent, conflict, authorship, and AI-use policies;
+- open-access routes, mandatory or optional charges, waivers, and licensing;
+- preprint, prior-publication, conference-extension, and duplicate-submission policy;
+- submission system and required metadata;
+- current ranking provider, metric name, metric year, exact category, quartile, rank, and denominator when available.
 
-To accept a Q1 claim, record:
+If facts conflict, retain the conflict and prefer the source responsible for that fact. Ask the journal when an ambiguity controls submission eligibility.
 
-- canonical journal title and ISSN where available;
-- metric provider, such as Journal Citation Reports, CiteScore/Scopus, or SCImago SJR;
+## Record Q1 evidence without overclaiming
+
+A Q1 statement must identify:
+
+- journal and ISSN;
+- provider, such as Journal Citation Reports, CiteScore/Scopus, or SCImago Journal Rank;
 - metric name and metric year;
 - exact subject category;
-- quartile in that category;
-- rank and denominator or percentile when available;
-- authoritative verification source;
-- access or capture date;
-- notes on ties, multiple categories, title changes, and coverage.
+- quartile;
+- rank and denominator when available;
+- a journal-specific authoritative HTTPS record;
+- verification date;
+- a local evidence capture and SHA-256;
+- the person who checked the record and a timezone-aware verification timestamp.
 
-Use the provider's official or institutionally licensed record when available. A search snippet, journal marketing page, crowd-sourced list, or undated table is not sufficient evidence.
+Save the provider page or a lawful local capture under the same directory as `publication/journals.csv`, then record its relative path and hash. Do not use a general provider homepage, a search-result snippet, an aggregator, a marketing page, or a manually typed list as journal-specific evidence.
 
-If only a secondary record is available, label the status `provisional` and do not state verified Q1.
+The local scorer checks structural completeness, provider-domain plausibility, age, category specificity, and evidence bytes. It does **not** retrieve the provider page, prove that the local capture came from that server, authenticate the verifier, or establish that a licensed database record has not changed. Describe its result as a **complete local Q1 evidence record**, not cryptographically authenticated remote truth.
 
-## Policy and practical checks
+Never collapse category-specific results into a timeless scalar label. State, for example, “Q1 under provider P, metric year Y, category C, verified on date D.”
 
-Fetch current official pages and record the check date for:
+## Score fit and choose a destination
 
-- aims and scope;
-- accepted article types;
-- author instructions and template;
-- word, page, figure, table, and supplement limits;
-- data, code, materials, and reporting policies;
-- preprint and prior-publication rules;
-- AI-writing and AI-review policies;
-- ethics, consent, conflicts, funding, authorship, and CRediT requirements;
-- anonymous-review requirements;
-- open-access route, APCs, waivers, and licensing;
-- submission system and file requirements;
-- special issues and deadlines;
-- withdrawal, transfer, and appeal policies.
+Use `scripts/score_journals.py` only after records are populated. Fit fields use a 0–5 scale:
 
-Publisher-wide policies may differ from journal-specific rules. The journal-specific current page governs unless the publisher states otherwise.
+- scope fit;
+- methods fit;
+- audience fit;
+- article-type fit;
+- open-science fit.
 
-## Portfolio decision
+The default ranking is scientific fit first. `--verified-q1-only` is an explicit eligibility filter; Q1 is not an implicit score bonus. Review component scores and rationale rather than accepting the total mechanically.
 
-Create a small portfolio rather than one supposedly perfect target:
+For a selected journal, write `publication/selected-journal.json` with:
 
-- primary target;
-- close alternative with similar manuscript requirements;
-- lower-risk or different-audience alternative;
-- optional conference or journal transfer route when disciplineally appropriate.
+- `journal`;
+- `fit_rationale`;
+- timezone-aware `selected_at`;
+- `q1_claim`: `verified`, `provisional`, or `not-claimed`;
+- when `verified`, the exact provider, metric year, category, and evidence SHA-256 copied from the candidate record.
 
-For each, state fit, verified metric status, principal risks, required manuscript changes, costs, and fallback logic. Avoid serial submissions to obviously mismatched journals solely to chase quartile.
+A verified claim must match exactly one candidate row and its current evidence bytes.
 
-Do not estimate acceptance probability without a defensible empirical basis. Historical acceptance rates, when available, may not transfer to the article type, topic, or current editorial regime.
+## Check integrity and operational constraints
 
-## Reverification
+Before choosing, check:
 
-Recheck before every submission or transfer:
+- whether the journal is recognized by the institution or funder;
+- transparent editorial board and peer-review process;
+- verifiable publisher identity and contact details;
+- realistic indexing claims;
+- fee transparency and waiver policy;
+- retraction, correction, and research-integrity policies;
+- whether special issues or solicitations are legitimate;
+- whether the journal is currently accepting the relevant article type;
+- whether submission creates conflicts with other manuscripts or prior versions.
 
-- title, ISSN, ownership, and scope;
-- current instructions and policies;
-- category-specific quartile and metric year;
-- APC and licensing;
-- special-issue legitimacy and deadline;
-- editor and submission-system destination;
-- retraction, delisting, or indexing changes.
+Do not rely on a single blacklist or whitelist. Investigate the journal itself.
 
-Record the exact verification date. A journal status verified for one submission is not permanently valid.
+## Plan a portfolio
 
-Use `scripts/score_journals.py` to rank documented fit while rejecting incomplete Q1 records. The script does not retrieve or authenticate journal data; a human must verify the evidence source.
+Prepare a small ordered portfolio:
+
+1. first-choice journal;
+2. close-fit alternative;
+3. conservative alternative.
+
+For each, record fit, Q1 evidence status, required reframing, format cost, fee exposure, policy risks, and likely additional work. Re-verify current facts before any resubmission because policies and rankings can change.
+
+Do not submit simultaneously where prohibited. Do not promise acceptance probabilities unsupported by journal-specific evidence.
 
 ## Failure modes
 
-Reject or qualify decisions based on:
+Reject or revise a selection process that:
 
-- highest percentile shown without its category;
-- current title confused with a predecessor or similarly named journal;
-- quartile from an unspecified provider or year;
-- impact factor confused with CiteScore or SJR;
-- indexing assumed from publisher branding;
-- stale APC, scope, or policy information;
-- special-issue invitations with unverifiable editors or domains;
-- fit scores presented as acceptance probabilities;
-- Q1 status used to excuse weak methodological fit;
-- a paper reshaped beyond its evidence merely to match a venue.
+- optimizes quartile before scope;
+- calls a journal Q1 without provider, year, and category;
+- uses stale, generic, or non-journal-specific evidence;
+- accepts a self-authored evidence file without human source checking;
+- treats a script PASS as remote authentication;
+- ignores article type, methods, or audience mismatch;
+- omits publication charges or policy constraints;
+- predicts acceptance from impact metrics;
+- recommends a journal with unverifiable identity or editorial practices;
+- preserves a Q1 label after the source record or metric year changes.
 
-No workflow can guarantee Q1 publication. Optimize for defensible fit, methodological quality, and a transparent submission strategy.
+The final recommendation is a reasoned portfolio decision, not a publication guarantee.
