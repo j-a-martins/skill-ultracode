@@ -17,16 +17,19 @@ INPUT_RE = re.compile(r"\\(?:input|include)\s*\{([^{}]+)\}")
 GRAPHICS_RE = re.compile(r"\\includegraphics(?:\[[^\]]*\])?\s*\{([^{}]+)\}")
 BIB_RE = re.compile(r"\\bibliography\s*\{([^{}]+)\}")
 ADDBIB_RE = re.compile(r"\\addbibresource(?:\[[^\]]*\])?\s*\{([^{}]+)\}")
-CITE_RE = re.compile(r"\\cite[a-zA-Z*]*\s*\{([^{}]+)\}")
+CITE_RE = re.compile(
+    r"\\(?:cite|citep|citet|citealp|citealt|citeauthor|citeyear|parencite|textcite|autocite|footcite|smartcite|supercite|nocite)[a-zA-Z*]*(?:\s*\[[^\]]*\]){0,2}\s*\{([^{}]+)\}"
+)
 LABEL_RE = re.compile(r"\\label\s*\{([^{}]+)\}")
 REF_RE = re.compile(r"\\(?:ref|eqref|autoref|pageref|cref|Cref)\s*\{([^{}]+)\}")
 BIB_KEY_RE = re.compile(r"@\w+\s*[({]\s*([^,\s]+)\s*,", re.IGNORECASE)
 UNSAFE = {
     "shell escape": re.compile(r"\\(?:immediate\s*)?write18\b|\\ShellEscape\b", re.IGNORECASE),
+    "direct Lua execution": re.compile(r"\\(?:directlua|latelua|luaexec)\b", re.IGNORECASE),
     "file output": re.compile(r"\\(?:openout|write|newwrite)\b", re.IGNORECASE),
     "file input primitive": re.compile(r"\\(?:openin|read|readline)\b", re.IGNORECASE),
     "pipe input": re.compile(r"\\input\s*\{?\s*\|", re.IGNORECASE),
-    "system command package": re.compile(r"\\usepackage(?:\[[^\]]*\])?\{(?:shellesc|catchfile)\}", re.IGNORECASE),
+    "external file package": re.compile(r"\\usepackage(?:\[[^\]]*\])?\{(?:shellesc|catchfile)\}", re.IGNORECASE),
 }
 
 
@@ -58,20 +61,23 @@ def safe_candidate(root: Path, current: Path, raw: str, extensions: Iterable[str
     if not value or "\x00" in value or "|" in value or value.startswith(("~", "/", "\\")):
         return None
     candidate = current.parent / value
-    if candidate.suffix:
-        candidates = [candidate]
-    else:
-        candidates = [candidate.with_suffix(ext) for ext in extensions]
+    candidates = [candidate] if candidate.suffix else [candidate.with_suffix(ext) for ext in extensions]
     for item in candidates:
         if within(root, item) and item.is_file() and not item.is_symlink():
-            return item.resolve()
+            try:
+                return item.resolve()
+            except (OSError, RuntimeError):
+                return None
     return candidates[0]
 
 
 def audit(root: Path, main: Path, *, allow_placeholders: bool = False, compiler_log: Path | None = None) -> dict[str, object]:
     errors: list[str] = []
     warnings: list[str] = []
-    root = root.resolve()
+    try:
+        root = root.resolve()
+    except (OSError, RuntimeError):
+        return {"passed": False, "errors": ["manuscript root cannot be resolved safely"], "warnings": [], "metrics": {}}
     main_path = main if main.is_absolute() else root / main
     if not within(root, main_path):
         return {"passed": False, "errors": ["main file escapes the manuscript root"], "warnings": [], "metrics": {}}
@@ -135,9 +141,9 @@ def audit(root: Path, main: Path, *, allow_placeholders: bool = False, compiler_
             if candidate is None or not within(root, candidate) or not candidate.is_file() or candidate.is_symlink():
                 errors.append(f"missing or unsafe graphic '{value}' in {path.relative_to(root)}")
 
-    duplicate_labels = sorted(key for key, count in Counter(labels).items() if count > 1)
-    for key in duplicate_labels:
-        errors.append(f"duplicate LaTeX label: {key}")
+    for key, count in Counter(labels).items():
+        if count > 1:
+            errors.append(f"duplicate LaTeX label: {key}")
     for key in sorted(set(refs) - set(labels)):
         errors.append(f"unresolved LaTeX reference: {key}")
 
@@ -149,9 +155,9 @@ def audit(root: Path, main: Path, *, allow_placeholders: bool = False, compiler_
             errors.append(str(exc))
             continue
         keys = BIB_KEY_RE.findall(bib_text)
-        duplicates = [key for key, count in Counter(keys).items() if count > 1]
-        for key in duplicates:
-            errors.append(f"duplicate bibliography key '{key}' in {path.relative_to(root)}")
+        for key, count in Counter(keys).items():
+            if count > 1:
+                errors.append(f"duplicate bibliography key '{key}' in {path.relative_to(root)}")
         bib_keys.update(keys)
     for key in sorted(set(citations) - bib_keys):
         errors.append(f"unresolved citation key: {key}")

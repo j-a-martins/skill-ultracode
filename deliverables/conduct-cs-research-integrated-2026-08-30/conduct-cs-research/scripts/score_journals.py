@@ -20,7 +20,19 @@ DEFAULT_WEIGHTS = {
     "article_fit": 0.15,
     "open_science_fit": 0.10,
 }
-PROVIDERS = {"JCR", "CITESCORE", "SJR"}
+PROVIDER_ALIASES = {
+    "JCR": "JCR",
+    "JOURNALCITATIONREPORTS": "JCR",
+    "CITESCORE": "CITESCORE",
+    "SCOPUSCITESCORE": "CITESCORE",
+    "SJR": "SJR",
+    "SCIMAGOSJR": "SJR",
+}
+PROVIDER_DOMAINS = {
+    "JCR": {"clarivate.com", "webofscience.com"},
+    "CITESCORE": {"scopus.com", "elsevier.com"},
+    "SJR": {"scimagojr.com"},
+}
 
 
 def parse_date(value: str) -> date | None:
@@ -30,21 +42,32 @@ def parse_date(value: str) -> date | None:
         return None
 
 
-def trusted_url(value: str, domains: list[str]) -> bool:
+def normalize_provider(value: str) -> str | None:
+    compact = "".join(character for character in value.upper() if character.isalnum())
+    return PROVIDER_ALIASES.get(compact)
+
+
+def trusted_url(value: str, domains: set[str]) -> bool:
     try:
         parsed = urlparse(value)
     except ValueError:
         return False
     if parsed.scheme != "https" or not parsed.hostname:
         return False
-    if not domains:
-        return True
     host = parsed.hostname.lower().rstrip(".")
     return any(host == domain or host.endswith("." + domain) for domain in domains)
 
 
-def score(path: Path, *, max_verification_age: int = 400, trusted_domains: list[str] | None = None) -> dict[str, object]:
-    trusted_domains = [item.lower().rstrip(".") for item in (trusted_domains or [])]
+def score(
+    path: Path,
+    *,
+    max_verification_age: int = 400,
+    trusted_domains: list[str] | None = None,
+    verified_q1_only: bool = False,
+) -> dict[str, object]:
+    extra_domains = {item.lower().rstrip(".") for item in (trusted_domains or []) if item.strip()}
+    if max_verification_age < 0:
+        return {"passed": False, "errors": ["max_verification_age must be nonnegative"], "warnings": [], "journals": []}
     try:
         headers, rows = read_csv(path)
     except ValidationError as exc:
@@ -81,8 +104,8 @@ def score(path: Path, *, max_verification_age: int = 400, trusted_domains: list[
         fit_score = sum(values[field] * DEFAULT_WEIGHTS[field] for field in FIT_FIELDS)
 
         q1_reasons: list[str] = []
-        provider = row.get("provider", "").upper().replace(" ", "")
-        if provider not in PROVIDERS:
+        provider = normalize_provider(row.get("provider", ""))
+        if provider is None:
             q1_reasons.append("unrecognized metric provider")
         if row.get("quartile", "").upper() != "Q1":
             q1_reasons.append("quartile is not Q1")
@@ -105,8 +128,11 @@ def score(path: Path, *, max_verification_age: int = 400, trusted_domains: list[
                 q1_reasons.append("verification date is in the future")
             elif age > max_verification_age:
                 q1_reasons.append(f"verification is older than {max_verification_age} days")
-        if not trusted_url(row.get("verification_url", ""), trusted_domains):
-            q1_reasons.append("verification URL is not an allowed HTTPS source")
+        allowed_domains = set(extra_domains)
+        if provider is not None:
+            allowed_domains.update(PROVIDER_DOMAINS[provider])
+        if not trusted_url(row.get("verification_url", ""), allowed_domains):
+            q1_reasons.append("verification URL is not authoritative for the declared provider")
 
         record = {
             "journal": journal,
@@ -114,7 +140,7 @@ def score(path: Path, *, max_verification_age: int = 400, trusted_domains: list[
             "fit_components": values,
             "q1_verified": not q1_reasons,
             "q1_reasons": q1_reasons,
-            "provider": row.get("provider", ""),
+            "provider": provider or row.get("provider", ""),
             "metric_year": row.get("metric_year", ""),
             "category": row.get("category", ""),
             "quartile": row.get("quartile", ""),
@@ -122,12 +148,21 @@ def score(path: Path, *, max_verification_age: int = 400, trusted_domains: list[
             "verification_url": row.get("verification_url", ""),
             "notes": row.get("notes", ""),
         }
-        output.append(record)
+        if not verified_q1_only or record["q1_verified"]:
+            output.append(record)
         if q1_reasons and row.get("quartile", "").upper() == "Q1":
             warnings.append(f"{journal}: Q1 claim is not verified ({'; '.join(q1_reasons)})")
 
-    output.sort(key=lambda item: (bool(item["q1_verified"]), float(item["fit_score"])), reverse=True)
-    return {"passed": not errors, "errors": errors, "warnings": warnings, "journals": output}
+    output.sort(key=lambda item: (float(item["fit_score"]), bool(item["q1_verified"])), reverse=True)
+    if verified_q1_only and not output:
+        warnings.append("no candidate has a verified Q1 record under the supplied constraints")
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "journals": output,
+        "ranking_basis": "scientific fit first; Q1 status is an independent eligibility field",
+    }
 
 
 def main() -> int:
@@ -135,12 +170,14 @@ def main() -> int:
     parser.add_argument("csv_file", type=Path)
     parser.add_argument("--max-verification-age", type=int, default=400)
     parser.add_argument("--trusted-domain", action="append", default=[])
+    parser.add_argument("--verified-q1-only", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
     result = score(
         args.csv_file.expanduser(),
         max_verification_age=args.max_verification_age,
         trusted_domains=args.trusted_domain,
+        verified_q1_only=args.verified_q1_only,
     )
     if args.as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
