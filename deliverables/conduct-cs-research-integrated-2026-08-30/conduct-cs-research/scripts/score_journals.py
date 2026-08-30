@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Rank documented journal fit while independently validating Q1 records."""
+"""Rank documented journal fit and validate local Q1 evidence records."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from _common import ValidationError, read_csv
+from _common import ValidationError, parse_timestamp, read_csv, verify_path_hash
 
 FIT_FIELDS = ["scope_fit", "methods_fit", "audience_fit", "article_fit", "open_science_fit"]
 DEFAULT_WEIGHTS = {
@@ -28,11 +29,14 @@ PROVIDER_ALIASES = {
     "SJR": "SJR",
     "SCIMAGOSJR": "SJR",
 }
+# These domains identify the provider platform. A matching hostname alone does
+# not prove the captured page contains the claimed journal/category record.
 PROVIDER_DOMAINS = {
-    "JCR": {"clarivate.com", "webofscience.com"},
-    "CITESCORE": {"scopus.com", "elsevier.com"},
+    "JCR": {"jcr.clarivate.com"},
+    "CITESCORE": {"scopus.com"},
     "SJR": {"scimagojr.com"},
 }
+ISSN_RE = re.compile(r"^\d{4}-\d{3}[\dXx]$")
 
 
 def parse_date(value: str) -> date | None:
@@ -52,27 +56,57 @@ def trusted_url(value: str, domains: set[str]) -> bool:
         parsed = urlparse(value)
     except ValueError:
         return False
-    if parsed.scheme != "https" or not parsed.hostname:
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.port:
         return False
     host = parsed.hostname.lower().rstrip(".")
-    return any(host == domain or host.endswith("." + domain) for domain in domains)
+    if not any(host == domain or host.endswith("." + domain) for domain in domains):
+        return False
+    # Reject a bare provider home page: evidence must identify a specific record.
+    return parsed.path not in {"", "/"} or bool(parsed.query)
+
+
+def normalized_identity(row: dict[str, str], provider: str | None) -> tuple[str, str, str, str]:
+    return (
+        re.sub(r"\s+", " ", row.get("journal", "").strip()).casefold(),
+        provider or row.get("provider", "").strip().casefold(),
+        row.get("metric_year", "").strip(),
+        re.sub(r"\s+", " ", row.get("category", "").strip()).casefold(),
+    )
 
 
 def score(
     path: Path,
     *,
     max_verification_age: int = 400,
-    trusted_domains: list[str] | None = None,
+    max_metric_lag: int = 2,
     verified_q1_only: bool = False,
 ) -> dict[str, object]:
-    extra_domains = {item.lower().rstrip(".") for item in (trusted_domains or []) if item.strip()}
     if max_verification_age < 0:
         return {"passed": False, "errors": ["max_verification_age must be nonnegative"], "warnings": [], "journals": []}
+    if not 0 <= max_metric_lag <= 5:
+        return {"passed": False, "errors": ["max_metric_lag must be between 0 and 5"], "warnings": [], "journals": []}
     try:
         headers, rows = read_csv(path)
     except ValidationError as exc:
         return {"passed": False, "errors": [str(exc)], "warnings": [], "journals": []}
-    required = {"journal", *FIT_FIELDS, "provider", "metric_year", "category", "quartile", "verification_url", "verified_date"}
+    required = {
+        "journal",
+        "issn",
+        *FIT_FIELDS,
+        "provider",
+        "metric_name",
+        "metric_year",
+        "category",
+        "quartile",
+        "rank",
+        "denominator",
+        "verification_url",
+        "evidence_path",
+        "evidence_sha256",
+        "verified_date",
+        "human_verified_by",
+        "human_verified_at",
+    }
     missing = sorted(required - set(headers))
     if missing:
         return {"passed": False, "errors": [f"missing columns: {', '.join(missing)}"], "warnings": [], "journals": []}
@@ -81,11 +115,18 @@ def score(
     warnings: list[str] = []
     output: list[dict[str, object]] = []
     today = date.today()
+    seen: set[tuple[str, str, str, str]] = set()
+    root = path.resolve().parent
+
     for index, row in enumerate(rows, start=2):
         journal = row.get("journal", "").strip()
         if not journal:
             errors.append(f"row {index}: journal is empty")
             continue
+        issn = row.get("issn", "").strip()
+        if issn and not ISSN_RE.fullmatch(issn):
+            errors.append(f"row {index}: ISSN has invalid format")
+
         values: dict[str, float] = {}
         valid_fit = True
         for field in FIT_FIELDS:
@@ -105,20 +146,45 @@ def score(
 
         q1_reasons: list[str] = []
         provider = normalize_provider(row.get("provider", ""))
+        identity = normalized_identity(row, provider)
+        if identity in seen:
+            errors.append(f"row {index}: duplicate journal/provider/year/category record")
+            continue
+        seen.add(identity)
+
         if provider is None:
             q1_reasons.append("unrecognized metric provider")
         if row.get("quartile", "").upper() != "Q1":
             q1_reasons.append("quartile is not Q1")
+        if not row.get("metric_name", "").strip():
+            q1_reasons.append("metric name is missing")
         if not row.get("category", "").strip():
             q1_reasons.append("exact subject category is missing")
+
         try:
             metric_year = int(row.get("metric_year", ""))
         except ValueError:
             metric_year = 0
             q1_reasons.append("metric year is invalid")
         else:
-            if metric_year > today.year or metric_year < today.year - 4:
-                q1_reasons.append("metric year is implausible or stale")
+            if metric_year > today.year:
+                q1_reasons.append("metric year is in the future")
+            elif metric_year < today.year - max_metric_lag:
+                q1_reasons.append(f"metric year is older than the allowed {max_metric_lag}-year lag")
+
+        rank = row.get("rank", "").strip()
+        denominator = row.get("denominator", "").strip()
+        if bool(rank) != bool(denominator):
+            q1_reasons.append("rank and denominator must be supplied together")
+        if rank and denominator:
+            try:
+                rank_value, denominator_value = int(rank), int(denominator)
+            except ValueError:
+                q1_reasons.append("rank and denominator must be integers")
+            else:
+                if rank_value < 1 or denominator_value < 1 or rank_value > denominator_value:
+                    q1_reasons.append("rank and denominator are inconsistent")
+
         verified = parse_date(row.get("verified_date", ""))
         if verified is None:
             q1_reasons.append("verification date is invalid")
@@ -128,40 +194,65 @@ def score(
                 q1_reasons.append("verification date is in the future")
             elif age > max_verification_age:
                 q1_reasons.append(f"verification is older than {max_verification_age} days")
-        allowed_domains = set(extra_domains)
-        if provider is not None:
-            allowed_domains.update(PROVIDER_DOMAINS[provider])
-        if not trusted_url(row.get("verification_url", ""), allowed_domains):
-            q1_reasons.append("verification URL is not authoritative for the declared provider")
+
+        if provider is None or not trusted_url(row.get("verification_url", ""), PROVIDER_DOMAINS.get(provider, set())):
+            q1_reasons.append("verification URL is not a specific authoritative provider record")
+
+        evidence_path = row.get("evidence_path", "").strip()
+        evidence_sha256 = row.get("evidence_sha256", "").strip().lower()
+        try:
+            verify_path_hash(root, evidence_path, evidence_sha256, label=f"row {index} evidence capture")
+        except ValidationError as exc:
+            q1_reasons.append(str(exc))
+
+        verifier = row.get("human_verified_by", "").strip()
+        if not verifier:
+            q1_reasons.append("human verifier is missing")
+        human_verified_at = row.get("human_verified_at", "").strip()
+        try:
+            human_time = parse_timestamp(human_verified_at, field=f"row {index} human_verified_at")
+        except ValidationError as exc:
+            q1_reasons.append(str(exc))
+        else:
+            if human_time.date() > today:
+                q1_reasons.append("human verification time is in the future")
 
         record = {
             "journal": journal,
+            "issn": issn,
             "fit_score": round(fit_score, 3),
             "fit_components": values,
             "q1_verified": not q1_reasons,
             "q1_reasons": q1_reasons,
             "provider": provider or row.get("provider", ""),
+            "metric_name": row.get("metric_name", ""),
             "metric_year": row.get("metric_year", ""),
             "category": row.get("category", ""),
             "quartile": row.get("quartile", ""),
             "verified_date": row.get("verified_date", ""),
             "verification_url": row.get("verification_url", ""),
+            "evidence_path": evidence_path,
+            "evidence_sha256": evidence_sha256,
+            "human_verified_by": verifier,
+            "human_verified_at": human_verified_at,
             "notes": row.get("notes", ""),
+            "verification_scope": "hash-bound local evidence record; remote page authenticity and verifier identity are not cryptographically authenticated",
         }
         if not verified_q1_only or record["q1_verified"]:
             output.append(record)
         if q1_reasons and row.get("quartile", "").upper() == "Q1":
-            warnings.append(f"{journal}: Q1 claim is not verified ({'; '.join(q1_reasons)})")
+            warnings.append(f"{journal}: Q1 claim is not locally verified ({'; '.join(q1_reasons)})")
 
-    output.sort(key=lambda item: (float(item["fit_score"]), bool(item["q1_verified"])), reverse=True)
+    output.sort(key=lambda item: float(item["fit_score"]), reverse=True)
     if verified_q1_only and not output:
-        warnings.append("no candidate has a verified Q1 record under the supplied constraints")
+        warnings.append("no candidate has a complete, current, hash-bound Q1 evidence record")
     return {
         "passed": not errors,
         "errors": errors,
         "warnings": warnings,
         "journals": output,
-        "ranking_basis": "scientific fit first; Q1 status is an independent eligibility field",
+        "ranking_basis": "scientific fit first; Q1 is an independently documented eligibility field",
+        "assurance_boundary": "The script validates local records and hashes; it does not retrieve the provider page or authenticate the human verifier.",
     }
 
 
@@ -169,21 +260,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv_file", type=Path)
     parser.add_argument("--max-verification-age", type=int, default=400)
-    parser.add_argument("--trusted-domain", action="append", default=[])
+    parser.add_argument("--max-metric-lag", type=int, default=2)
     parser.add_argument("--verified-q1-only", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
     result = score(
         args.csv_file.expanduser(),
         max_verification_age=args.max_verification_age,
-        trusted_domains=args.trusted_domain,
+        max_metric_lag=args.max_metric_lag,
         verified_q1_only=args.verified_q1_only,
     )
     if args.as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         for item in result["journals"]:
-            status = "verified Q1" if item["q1_verified"] else "Q1 not verified"
+            status = "locally verified Q1 record" if item["q1_verified"] else "Q1 not verified"
             print(f"{item['journal']}: fit={item['fit_score']:.3f}; {status}")
         for item in result["errors"]:
             print(f"ERROR: {item}", file=sys.stderr)
