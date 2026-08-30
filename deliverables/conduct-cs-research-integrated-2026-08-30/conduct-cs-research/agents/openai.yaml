@@ -1,0 +1,4 @@
+interface:
+  display_name: "Conduct CS Research"
+  short_description: "Research, review, write, and publish CS scholarship"
+  default_prompt: "Use $conduct-cs-research to plan and execute this computer-science research task with evidence, methodological, writing, and publication controls."
