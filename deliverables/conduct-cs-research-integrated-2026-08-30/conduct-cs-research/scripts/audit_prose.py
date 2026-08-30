@@ -11,7 +11,7 @@ from pathlib import Path
 
 from _common import ValidationError, read_text
 
-NUMBER_RE = re.compile(r"(?<![\w.])[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?%?(?![\w.])")
+NUMBER_RE = re.compile(r"(?<![\w.])[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?(?:%|(?![\w.]))")
 UNIT_RE = re.compile(r"(?i)(?<!\w)(?:ms|s|min|h|Hz|kHz|MHz|GHz|B|KB|MB|GB|TB|m|cm|mm|km|g|kg|mg|K|°C|%|pp|ppm|dB|W|kW|V|mV|A|mA)(?!\w)")
 CITE_RE = re.compile(r"\\cite[a-zA-Z*]*\s*\{([^{}]+)\}")
 XREF_RE = re.compile(r"\\(?:ref|eqref|autoref|pageref|cref|Cref|label)\s*\{([^{}]+)\}")
