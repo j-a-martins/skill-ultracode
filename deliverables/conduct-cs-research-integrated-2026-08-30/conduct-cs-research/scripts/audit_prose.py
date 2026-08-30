@@ -13,7 +13,7 @@ from typing import Callable
 from _common import ValidationError, read_text
 
 NUMBER_RE = re.compile(
-    r"(?<![\w.])[+\-−]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][+\-−]?\d+)?(?:%|(?![\w.]))"
+    r"(?<![\w.+\-−])[+\-−]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][+\-−]?\d+)?(?:%|(?![\w.]))"
 )
 UNIT_RE = re.compile(
     r"(?i)(?<!\w)(?:ps|ns|µs|μs|us|ms|s|min|h|Hz|kHz|MHz|GHz|B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|m|cm|mm|µm|μm|km|g|kg|mg|µg|μg|K|°C|°F|%|pp|ppm|dB|W|kW|V|mV|A|mA)(?!\w)"
