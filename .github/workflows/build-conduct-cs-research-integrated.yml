@@ -1,0 +1,34 @@
+name: Build integrated conduct-cs-research release
+
+on:
+  push:
+    branches:
+      - artifact/conduct-cs-research-integrated-20260830
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out build branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run validation, adversarial tests, overengineering checks, and packaging
+        run: python deliverables/conduct-cs-research-integrated-2026-08-30/tools/release.py
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: conduct-cs-research-integrated-2026-08-30
+          path: deliverables/conduct-cs-research-integrated-2026-08-30/release/*
+          if-no-files-found: error
+          retention-days: 30

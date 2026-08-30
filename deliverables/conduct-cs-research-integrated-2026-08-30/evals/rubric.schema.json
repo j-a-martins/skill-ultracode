@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/conduct-cs-research-eval-result.schema.json",
+  "title": "Conduct CS Research evaluation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "trial",
+    "triggered",
+    "mode_selected",
+    "checks",
+    "critical_failures",
+    "verdict"
+  ],
+  "properties": {
+    "case_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "trial": {"type": "integer", "minimum": 1},
+    "model": {"type": "string"},
+    "configuration": {"type": "string"},
+    "triggered": {"type": "boolean"},
+    "mode_selected": {
+      "type": ["string", "null"],
+      "enum": [
+        "full-research-lifecycle",
+        "systematic-search",
+        "peer-review",
+        "scientific-prose",
+        null
+      ]
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterion", "passed", "evidence"],
+        "properties": {
+          "criterion": {"type": "string"},
+          "passed": {"type": "boolean"},
+          "evidence": {"type": "string"},
+          "severity": {"enum": ["critical", "major", "minor"]}
+        }
+      }
+    },
+    "critical_failures": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "routing": {"enum": ["pass", "partial", "fail", "not-applicable"]},
+        "evidence_integrity": {"enum": ["pass", "partial", "fail", "not-applicable"]},
+        "methodological_completeness": {"enum": ["pass", "partial", "fail", "not-applicable"]},
+        "claim_calibration": {"enum": ["pass", "partial", "fail", "not-applicable"]},
+        "confidentiality_and_policy": {"enum": ["pass", "partial", "fail", "not-applicable"]},
+        "protected_content": {"enum": ["pass", "partial", "fail", "not-applicable"]},
+        "actionability": {"enum": ["pass", "partial", "fail", "not-applicable"]},
+        "proportionality": {"enum": ["pass", "partial", "fail", "not-applicable"]}
+      }
+    },
+    "verdict": {"enum": ["pass", "fail"]},
+    "notes": {"type": "string"}
+  }
+}
