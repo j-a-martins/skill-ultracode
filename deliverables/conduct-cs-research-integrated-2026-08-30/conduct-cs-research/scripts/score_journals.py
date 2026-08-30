@@ -29,14 +29,12 @@ PROVIDER_ALIASES = {
     "SJR": "SJR",
     "SCIMAGOSJR": "SJR",
 }
-# These domains identify the provider platform. A matching hostname alone does
-# not prove the captured page contains the claimed journal/category record.
 PROVIDER_DOMAINS = {
     "JCR": {"jcr.clarivate.com"},
     "CITESCORE": {"scopus.com"},
     "SJR": {"scimagojr.com"},
 }
-ISSN_RE = re.compile(r"^\d{4}-\d{3}[\dXx]$")
+ISSN_RE = re.compile(r"^\d{4}-\d{3}[\dX]$")
 
 
 def parse_date(value: str) -> date | None:
@@ -51,6 +49,21 @@ def normalize_provider(value: str) -> str | None:
     return PROVIDER_ALIASES.get(compact)
 
 
+def normalize_issn(value: str) -> str:
+    return value.strip().upper()
+
+
+def valid_issn(value: str) -> bool:
+    normalized = normalize_issn(value)
+    if not ISSN_RE.fullmatch(normalized):
+        return False
+    digits = normalized.replace("-", "")
+    total = sum(int(digit) * weight for digit, weight in zip(digits[:7], range(8, 1, -1)))
+    expected = (11 - total % 11) % 11
+    check = 10 if digits[-1] == "X" else int(digits[-1])
+    return expected == check
+
+
 def trusted_url(value: str, domains: set[str]) -> bool:
     try:
         parsed = urlparse(value)
@@ -62,17 +75,43 @@ def trusted_url(value: str, domains: set[str]) -> bool:
     host = parsed.hostname.lower().rstrip(".")
     if not any(host == domain or host.endswith("." + domain) for domain in domains):
         return False
-    # Reject a bare provider home page: evidence must identify a specific record.
     return parsed.path not in {"", "/"} or bool(parsed.query)
 
 
-def normalized_identity(row: dict[str, str], provider: str | None) -> tuple[str, str, str, str]:
+def journal_identity(row: dict[str, str]) -> tuple[str, str]:
     return (
         re.sub(r"\s+", " ", row.get("journal", "").strip()).casefold(),
+        normalize_issn(row.get("issn", "")),
+    )
+
+
+def observation_identity(
+    row: dict[str, str], provider: str | None
+) -> tuple[str, str, str, str, str, str]:
+    journal, issn = journal_identity(row)
+    return (
+        journal,
+        issn,
         provider or row.get("provider", "").strip().casefold(),
         row.get("metric_year", "").strip(),
         re.sub(r"\s+", " ", row.get("category", "").strip()).casefold(),
+        row.get("evidence_sha256", "").strip().lower(),
     )
+
+
+def _fit_values(row: dict[str, str], index: int, errors: list[str]) -> dict[str, float] | None:
+    values: dict[str, float] = {}
+    for field in FIT_FIELDS:
+        try:
+            value = float(row.get(field, ""))
+        except ValueError:
+            errors.append(f"row {index}: {field} must be numeric")
+            return None
+        if not 0 <= value <= 5:
+            errors.append(f"row {index}: {field} must be between 0 and 5")
+            return None
+        values[field] = value
+    return values
 
 
 def score(
@@ -116,7 +155,8 @@ def score(
     warnings: list[str] = []
     output: list[dict[str, object]] = []
     today = date.today()
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str, str]] = set()
+    fit_by_journal: dict[tuple[str, str], dict[str, float]] = {}
     root = path.resolve().parent
 
     for index, row in enumerate(rows, start=2):
@@ -124,35 +164,32 @@ def score(
         if not journal:
             errors.append(f"row {index}: journal is empty")
             continue
-        issn = row.get("issn", "").strip()
-        if issn and not ISSN_RE.fullmatch(issn):
-            errors.append(f"row {index}: ISSN has invalid format")
-
-        values: dict[str, float] = {}
-        valid_fit = True
-        for field in FIT_FIELDS:
-            try:
-                value = float(row.get(field, ""))
-            except ValueError:
-                errors.append(f"row {index}: {field} must be numeric")
-                valid_fit = False
-                continue
-            if not 0 <= value <= 5:
-                errors.append(f"row {index}: {field} must be between 0 and 5")
-                valid_fit = False
-            values[field] = value
-        if not valid_fit:
+        values = _fit_values(row, index, errors)
+        if values is None:
             continue
+        identity = journal_identity(row)
+        prior_fit = fit_by_journal.get(identity)
+        if prior_fit is not None and prior_fit != values:
+            errors.append(
+                f"row {index}: fit components disagree across category records for the same journal and ISSN"
+            )
+            continue
+        fit_by_journal[identity] = values
         fit_score = sum(values[field] * DEFAULT_WEIGHTS[field] for field in FIT_FIELDS)
 
         q1_reasons: list[str] = []
         provider = normalize_provider(row.get("provider", ""))
-        identity = normalized_identity(row, provider)
-        if identity in seen:
-            errors.append(f"row {index}: duplicate journal/provider/year/category record")
+        observation = observation_identity(row, provider)
+        if observation in seen:
+            errors.append(f"row {index}: duplicate journal/ISSN/provider/year/category/evidence record")
             continue
-        seen.add(identity)
+        seen.add(observation)
 
+        issn = normalize_issn(row.get("issn", ""))
+        if not issn:
+            q1_reasons.append("ISSN is missing")
+        elif not valid_issn(issn):
+            q1_reasons.append("ISSN is malformed or has an invalid checksum")
         if provider is None:
             q1_reasons.append("unrecognized metric provider")
         if row.get("quartile", "").upper() != "Q1":
@@ -196,7 +233,9 @@ def score(
             elif age > max_verification_age:
                 q1_reasons.append(f"verification is older than {max_verification_age} days")
 
-        if provider is None or not trusted_url(row.get("verification_url", ""), PROVIDER_DOMAINS.get(provider, set())):
+        if provider is None or not trusted_url(
+            row.get("verification_url", ""), PROVIDER_DOMAINS.get(provider, set())
+        ):
             q1_reasons.append("verification URL is not a specific authoritative provider record")
 
         evidence_path = row.get("evidence_path", "").strip()
@@ -211,7 +250,9 @@ def score(
             q1_reasons.append("human verifier is missing")
         human_verified_at = row.get("human_verified_at", "").strip()
         try:
-            human_time = parse_timestamp(human_verified_at, field=f"row {index} human_verified_at")
+            human_time = parse_timestamp(
+                human_verified_at, field=f"row {index} human_verified_at"
+            )
         except ValidationError as exc:
             q1_reasons.append(str(exc))
         else:
@@ -237,14 +278,23 @@ def score(
             "human_verified_by": verifier,
             "human_verified_at": human_verified_at,
             "notes": row.get("notes", ""),
-            "verification_scope": "hash-bound local evidence record; remote page authenticity and verifier identity are not cryptographically authenticated",
+            "verification_scope": (
+                "hash-bound local evidence record; remote page authenticity and verifier identity "
+                "are not cryptographically authenticated"
+            ),
         }
         if not verified_q1_only or record["q1_verified"]:
             output.append(record)
         if q1_reasons and row.get("quartile", "").upper() == "Q1":
             warnings.append(f"{journal}: Q1 claim is not locally verified ({'; '.join(q1_reasons)})")
 
-    output.sort(key=lambda item: float(item["fit_score"]), reverse=True)
+    output.sort(
+        key=lambda item: (
+            -float(item["fit_score"]),
+            str(item["journal"]).casefold(),
+            str(item["category"]).casefold(),
+        )
+    )
     if verified_q1_only and not output:
         warnings.append("no candidate has a complete, current, hash-bound Q1 evidence record")
     return {
@@ -253,7 +303,10 @@ def score(
         "warnings": warnings,
         "journals": output,
         "ranking_basis": "scientific fit first; Q1 is an independently documented eligibility field",
-        "assurance_boundary": "The script validates local records and hashes; it does not retrieve the provider page or authenticate the human verifier.",
+        "assurance_boundary": (
+            "The script validates local records and hashes; it does not retrieve the provider page "
+            "or authenticate the human verifier."
+        ),
     }
 
 

@@ -9,17 +9,10 @@ import os
 import shutil
 import stat
 import sys
-import tempfile
 from pathlib import Path
 
-from _common import utc_now, write_json_new, write_text_new
-
-MODES = (
-    "full-research-lifecycle",
-    "systematic-search",
-    "peer-review",
-    "scientific-prose",
-)
+from _common import scan_tree, utc_now, write_json_new, write_text_new
+from _project_model import MODES, SCHEMA_VERSION
 
 COMMON_TEXT = {
     "governance/charter.md": "# Research charter\n\nTODO: objective, deliverable, audience, governance, constraints, confidentiality, authorship, ethics, and AI-use policy.\n",
@@ -119,13 +112,54 @@ def project_files(mode: str) -> dict[str, str]:
     return files
 
 
-def _safe_cleanup(staging: Path, identity: tuple[int, int]) -> None:
+def _allowed_directories(file_names: set[str]) -> set[str]:
+    result = {"."}
+    for name in file_names:
+        parent = Path(name).parent
+        while parent != Path("."):
+            result.add(parent.as_posix())
+            parent = parent.parent
+    return result
+
+
+def _safe_cleanup_reserved(target: Path, identity: tuple[int, int], expected: set[str]) -> bool:
     try:
-        info = staging.lstat()
+        info = target.lstat()
     except FileNotFoundError:
-        return
-    if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and (info.st_dev, info.st_ino) == identity:
-        shutil.rmtree(staging)
+        return True
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        return False
+    if (info.st_dev, info.st_ino) != identity:
+        return False
+    allowed_dirs = _allowed_directories(expected)
+    stack = [target]
+    while stack:
+        directory = stack.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                entries = list(iterator)
+        except OSError:
+            return False
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(target).as_posix()
+            try:
+                entry_info = entry.stat(follow_symlinks=False)
+            except OSError:
+                return False
+            if stat.S_ISLNK(entry_info.st_mode):
+                return False
+            if stat.S_ISDIR(entry_info.st_mode):
+                if relative not in allowed_dirs:
+                    return False
+                stack.append(path)
+            elif stat.S_ISREG(entry_info.st_mode):
+                if entry_info.st_nlink != 1 or relative not in expected:
+                    return False
+            else:
+                return False
+    shutil.rmtree(target)
+    return True
 
 
 def create_project(target: Path, name: str, mode: str) -> dict[str, object]:
@@ -138,23 +172,23 @@ def create_project(target: Path, name: str, mode: str) -> dict[str, object]:
     requested.parent.mkdir(parents=True, exist_ok=True)
     parent = requested.parent.resolve(strict=True)
     target = parent / requested.name
-    if target.exists() or target.is_symlink():
-        raise FileExistsError(f"target already exists: {target}")
+    target.mkdir(mode=0o700, exist_ok=False)
+    target_info = target.lstat()
+    identity = (target_info.st_dev, target_info.st_ino)
 
-    staging = Path(tempfile.mkdtemp(prefix=".conduct-cs-research-", dir=parent))
-    info = staging.lstat()
-    identity = (info.st_dev, info.st_ino)
+    templates = project_files(mode)
+    expected = set(templates) | {"project.json", "state.json"}
     try:
-        for relative, content in project_files(mode).items():
-            path = staging / relative
+        for relative, content in templates.items():
+            path = target / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             write_text_new(path, content)
 
         now = utc_now()
         write_json_new(
-            staging / "project.json",
+            target / "project.json",
             {
-                "schema_version": 3,
+                "schema_version": SCHEMA_VERSION,
                 "name": name.strip(),
                 "mode": mode,
                 "created_at": now,
@@ -163,22 +197,34 @@ def create_project(target: Path, name: str, mode: str) -> dict[str, object]:
             },
         )
         write_json_new(
-            staging / "state.json",
+            target / "state.json",
             {
-                "schema_version": 3,
+                "schema_version": SCHEMA_VERSION,
                 "stage": "intake",
                 "completed_gates": [],
                 "external_actions": [],
                 "updated_at": now,
             },
         )
-        if target.exists() or target.is_symlink():
-            raise FileExistsError(f"target appeared during initialization: {target}")
-        os.rename(staging, target)
-        files = sorted(str(path.relative_to(target)) for path in target.rglob("*") if path.is_file())
-        return {"project": str(target), "mode": mode, "files_created": len(files), "files": files}
-    except Exception:
-        _safe_cleanup(staging, identity)
+        scanned = scan_tree(target, max_entries=256, max_depth=8, max_total_bytes=20_000_000)
+        actual = {path.relative_to(target).as_posix() for path in scanned["files"]}
+        if actual != expected:
+            raise RuntimeError(
+                f"initializer file-set mismatch: missing={sorted(expected - actual)}, "
+                f"unexpected={sorted(actual - expected)}"
+            )
+        files = sorted(actual)
+        return {
+            "project": str(target),
+            "mode": mode,
+            "files_created": len(files),
+            "files": files,
+        }
+    except Exception as exc:
+        if not _safe_cleanup_reserved(target, identity, expected):
+            raise RuntimeError(
+                f"initialization failed and reserved target could not be safely removed: {target}"
+            ) from exc
         raise
 
 

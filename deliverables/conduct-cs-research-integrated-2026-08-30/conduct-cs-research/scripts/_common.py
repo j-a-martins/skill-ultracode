@@ -30,6 +30,9 @@ ID_PATTERNS = {
     "action_id": re.compile(r"^A\d{4}$"),
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+DEFAULT_MAX_ENTRIES = 10_000
+DEFAULT_MAX_DEPTH = 32
+DEFAULT_MAX_TOTAL_BYTES = 1_000_000_000
 
 
 class ValidationError(ValueError):
@@ -147,7 +150,7 @@ def read_text(path: Path, *, max_bytes: int = 10_000_000) -> str:
         raise ValidationError(f"file is not UTF-8: {path}") from exc
 
 
-def sha256_file(path: Path, *, max_bytes: int = 1_000_000_000) -> str:
+def sha256_file(path: Path, *, max_bytes: int = DEFAULT_MAX_TOTAL_BYTES) -> str:
     descriptor, before = _open_regular(path, max_bytes=max_bytes)
     digest = hashlib.sha256()
     total = 0
@@ -166,6 +169,75 @@ def sha256_file(path: Path, *, max_bytes: int = 1_000_000_000) -> str:
         return digest.hexdigest()
     finally:
         os.close(descriptor)
+
+
+def scan_tree(
+    root: Path,
+    *,
+    max_entries: int = DEFAULT_MAX_ENTRIES,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+) -> dict[str, Any]:
+    """Inspect a tree without following links and enforce bounded traversal."""
+    if max_entries < 1 or max_depth < 1 or max_total_bytes < 1:
+        raise ValidationError("tree limits must be positive")
+    try:
+        root_info = root.lstat()
+    except FileNotFoundError as exc:
+        raise ValidationError(f"missing directory: {root}") from exc
+    except OSError as exc:
+        raise ValidationError(f"cannot inspect directory {root}: {exc}") from exc
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+        raise ValidationError(f"not a regular directory: {root}")
+
+    stack: list[Path] = [root]
+    files: list[Path] = []
+    entries_seen = 0
+    total_bytes = 0
+    max_depth_seen = 0
+    while stack:
+        directory = stack.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda item: item.name)
+        except OSError as exc:
+            raise ValidationError(f"cannot scan directory {directory}: {exc}") from exc
+        for entry in entries:
+            entries_seen += 1
+            if entries_seen > max_entries:
+                raise ValidationError(f"tree exceeds {max_entries} filesystem entries: {root}")
+            path = Path(entry.path)
+            depth = len(path.relative_to(root).parts)
+            max_depth_seen = max(max_depth_seen, depth)
+            if depth > max_depth:
+                raise ValidationError(f"tree exceeds maximum relative depth {max_depth}: {path}")
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise ValidationError(f"cannot inspect tree entry {path}: {exc}") from exc
+            if stat.S_ISLNK(info.st_mode):
+                raise ValidationError(f"linked path is not allowed: {path}")
+            if stat.S_ISDIR(info.st_mode):
+                stack.append(path)
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise ValidationError(f"special file is not allowed: {path}")
+            if info.st_nlink != 1:
+                raise ValidationError(f"hard-linked file is not allowed: {path}")
+            total_bytes += info.st_size
+            if total_bytes > max_total_bytes:
+                raise ValidationError(
+                    f"tree exceeds aggregate regular-file budget {max_total_bytes} bytes: {root}"
+                )
+            files.append(path)
+    files.sort(key=lambda item: item.relative_to(root).as_posix())
+    return {
+        "entries": entries_seen,
+        "files": files,
+        "file_count": len(files),
+        "total_bytes": total_bytes,
+        "max_depth": max_depth_seen,
+    }
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -253,7 +325,7 @@ def project_path(
     raw: str,
     *,
     must_exist: bool = True,
-    max_bytes: int = 1_000_000_000,
+    max_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
 ) -> Path:
     """Resolve a portable project-relative regular-file path beneath root."""
     if not isinstance(raw, str) or not raw.strip() or "\x00" in raw or "\\" in raw:
