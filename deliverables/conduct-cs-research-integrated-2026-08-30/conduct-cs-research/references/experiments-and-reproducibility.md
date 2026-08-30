@@ -3,161 +3,161 @@
 ## Contents
 
 1. Protocol before execution
-2. Implementation and environment
-3. Pilot and definitive runs
-4. Statistical and computational analysis
-5. Robustness and negative evidence
-6. Reproducibility package
-7. Domain-specific cautions
-8. Adversarial checks
+2. Pilot and feasibility decision
+3. Run provenance
+4. Result provenance
+5. Statistical and computational analysis
+6. Robustness and negative evidence
+7. Reproducibility package
+8. Independent reproduction claims
+9. Failure modes
 
 ## Protocol before execution
 
-Define the inferential target before collecting or inspecting definitive results. Record:
+Before definitive execution, specify:
 
-- datasets, repositories, participants, workloads, proofs, simulations, or tasks;
-- sampling and inclusion rules;
-- splits and leakage controls;
-- baselines and comparator-selection rationale;
-- primary and secondary outcomes;
-- metrics and aggregation;
-- uncertainty and multiplicity methods;
-- hyperparameter or design-search budget;
-- seeds and repeated-trial policy where stochasticity matters;
-- exclusion, failure, and outlier handling;
-- stopping and abandonment criteria;
-- robustness, sensitivity, ablation, and subgroup analyses;
-- compute, time, financial, and human-resource budgets;
-- ethics, privacy, security, and disclosure constraints.
+- research questions and estimands or formal propositions;
+- datasets, participants, workloads, systems, or proof assumptions;
+- sampling, splits, exclusions, and missing-data handling;
+- baselines, comparators, controls, and ablations;
+- outcomes, metrics, uncertainty, multiplicity, and robustness checks;
+- environment, code version, data version, compute, and budget;
+- stopping, failure, rerun, and deviation rules;
+- which analyses are confirmatory and which are exploratory.
 
-Do not choose a primary metric, dataset slice, baseline, prompt, or stopping point after seeing favorable outcomes and present it as prospective.
+A protocol reconstructed after observing results is retrospective. Do not represent it as preregistered or prospective.
 
-## Implementation and environment
+## Pilot and feasibility decision
 
-Bind every definitive execution to recoverable inputs:
+Use a pilot to test:
 
-- source-code commit or immutable archive;
-- uncommitted-diff status;
-- data or corpus version and acquisition date;
-- dependency lockfile, container, or environment export;
-- operating system, hardware, accelerator, compiler, driver, and relevant service versions;
-- model identifier, provider, release or snapshot date, and API parameters;
-- configuration file and command line;
-- random seeds and deterministic settings;
-- credentials or proprietary dependencies described without exposing secrets;
-- raw-output path and checksum when appropriate.
+- access and data quality;
+- measurement validity;
+- instrumentation and logging;
+- runtime, memory, storage, and cost;
+- pipeline correctness;
+- baseline implementation;
+- analysis assumptions;
+- participant burden and safety where applicable.
 
-Capture the environment before it changes. A package list reconstructed after the run is weaker evidence and must be labeled as such.
+Record `go`, `revise`, or `stop` in `study/pilot-decision.json`, with timezone-aware decision time, protocol effect, and one or more project-relative evidence paths plus SHA-256 values. A stop decision blocks definitive execution. A revise decision requires an amendment before affected definitive runs.
 
-## Pilot and definitive runs
+Do not promote a favorable pilot result into the definitive analysis without a protocol-authorized role.
 
-Use pilots to test instrumentation, runtime, scale, data quality, and assumptions. Do not mix pilot and definitive evidence without a declared rule.
+## Run provenance
 
-For every run, record:
+Assign each execution `E####` in `study/runs.csv`. Record:
 
-- purpose and relation to protocol;
-- start and end time;
-- inputs and versions;
-- parameterization;
-- resource allocation;
-- exit status and failures;
-- raw outputs and logs;
-- exclusions or manual intervention;
-- whether the run is pilot, exploratory, confirmatory, or replication.
+- kind and phase: pilot, exploratory, definitive, or replication;
+- start and end times with timezone;
+- code or proof version;
+- data version;
+- environment and dependencies;
+- parameters, seeds where meaningful, hardware, platform, and external-service versions;
+- raw-output path and SHA-256;
+- status and failure notes.
 
-Preserve failed runs that reveal method fragility, selection pressure, or reproducibility problems. Do not repeatedly rerun until a favorable seed appears without reporting the selection process.
+For local code, data, and environment manifests, record project-relative paths and hashes. A version string alone is not enough when local bytes are load-bearing. Sensitive or external data may use a hash-bound manifest rather than copying the data into the workspace.
+
+A complete definitive or replication run needs terminal time and hash-bound raw output. Failed, cancelled, planned, running, pilot, or exploratory records do not satisfy the definitive execution gate.
+
+Preserve unfavorable and failed runs when they affect selection, validity, or reproducibility.
+
+## Result provenance
+
+Assign each result `R####` in `study/results.csv`. Record:
+
+- source run IDs;
+- analysis code path and hash, or `not-applicable` for a genuinely noncomputational result;
+- input paths and matching hashes;
+- estimate or formal result;
+- uncertainty;
+- robustness and sensitivity result;
+- status and notes.
+
+An active, reported, or confirmed result may depend only on complete runs. Failed, withdrawn, or superseded results cannot silently support active manuscript claims.
+
+If multiple files are inputs, separate paths and hashes with semicolons in the same order. Recompute hashes after any change and re-audit dependent results and claims.
 
 ## Statistical and computational analysis
 
-Match the analysis to the design and dependence structure. Check:
+Match analysis to design and estimand. Check as relevant:
 
-- unit of analysis versus unit of sampling;
-- repeated measures, clustering, paired comparisons, and temporal dependence;
-- missingness and censoring;
+- unit of analysis and independence;
+- train/validation/test separation and leakage;
+- repeated measures, clustering, hierarchy, and temporal dependence;
+- multiplicity and researcher degrees of freedom;
+- effect sizes and uncertainty, not only thresholded p-values;
+- missing data and exclusions;
 - model assumptions and diagnostics;
-- effect estimates and uncertainty, not p-values alone;
-- multiplicity across outcomes, models, datasets, subgroups, and repeated looks;
-- practical as well as statistical significance;
-- power, precision, or simulation-based operating characteristics where relevant;
-- preregistered versus exploratory analyses;
-- analysis-code version and test coverage;
-- numerical stability and convergence;
-- human-evaluation reliability and adjudication.
+- calibration, class imbalance, and decision thresholds;
+- stochastic variability across seeds or runs;
+- hardware, compiler, library, model, API, and dataset drift;
+- correctness and numerical stability;
+- qualitative coding, reflexivity, and disagreement handling;
+- formal proof assumptions, boundary cases, and machine checking where applicable.
 
-Avoid pseudo-replication. Multiple observations from one repository, participant, prompt, model, or dataset may not be independent evidence.
+Never select only favorable metrics, seeds, datasets, subgroups, stopping points, or output files. Exploratory analyses remain labeled exploratory.
 
 ## Robustness and negative evidence
 
-Plan checks that could change the conclusion:
+Design checks around plausible failure modes rather than a ritual checklist. Consider:
 
-- alternate defensible metrics and estimators;
-- perturbations, stress tests, and distribution shifts;
-- alternative data cleaning or exclusion rules;
-- ablations and component substitution;
-- stronger, simpler, and contemporary baselines;
-- hardware, software, geographic, linguistic, demographic, temporal, or version variation;
-- failure cases and counterexamples;
-- replication on independent data or implementation;
-- sensitivity to seeds, prompts, annotators, or search strategy;
-- placebo, negative-control, or falsification tests where meaningful.
+- alternative specifications and estimators;
+- ablations and component isolation;
+- stronger or simpler baselines;
+- distribution, workload, platform, or temporal shifts;
+- sensitivity to seeds, thresholds, preprocessing, and hyperparameters;
+- null, adverse, contradictory, or unstable results;
+- failed assumptions and boundary cases;
+- replication across implementations or sites where justified.
 
-Report checks selected before and after initial results separately. Preserve null and adverse findings. If robustness fails, narrow the claim rather than hiding the result.
+A robustness result is meaningful only when its data, code, parameters, and output are preserved like the primary result.
 
 ## Reproducibility package
 
-Provide what another qualified researcher needs to audit or reproduce the work, subject to legal and ethical limits:
+A practical package may contain:
 
-- overview and exact reproduction path;
-- data provenance, licenses, access conditions, and checksums;
-- code, configuration, dependencies, and environment;
-- commands for preprocessing, execution, analysis, and figure generation;
-- expected outputs and resource requirements;
-- seed and nondeterminism notes;
-- tests or smoke checks;
-- mapping from manuscript tables and figures to generation commands;
-- known deviations, failures, and unsupported platforms;
-- archival identifier and license;
-- restricted-data or proprietary-component substitute procedure.
+- source and build instructions;
+- dependency lockfile or environment manifest;
+- data access and license instructions;
+- exact commands for tests, preprocessing, training, evaluation, and figure generation;
+- seed and determinism policy;
+- expected outputs and checksums;
+- resource requirements;
+- raw and processed outputs or lawful manifests;
+- analysis scripts;
+- claim-to-result mapping;
+- known limitations and nondeterminism;
+- archival location and persistent identifier.
 
-Never claim full reproducibility when critical data, code, models, services, or manual steps are unavailable. Describe the actual level: inspectable, computationally reproducible, independently replicated, or only partially recoverable.
+Test from a clean, isolated, no-secret environment. Do not install unreviewed dependencies into a base environment or execute destructive commands. Record what actually ran.
 
-## Domain-specific cautions
+## Independent reproduction claims
 
-### ML and LLM work
+Use terms carefully:
 
-Control test-set and prompt leakage, model selection, repeated trials, evaluator bias, contamination, version drift, non-deterministic APIs, and hidden provider changes. Human evaluation needs a defined rubric, training, blinding where possible, disagreement handling, and uncertainty.
+- **internal consistency** — current local outputs match manuscript values;
+- **author rerun** — authors reran their own artifact;
+- **independent reproduction or replication** — an independent party performed the relevant procedure under stated conditions;
+- **artifact badge or certification** — awarded by the responsible venue or evaluator under current rules.
 
-### Systems work
+Do not claim independent reproduction, replication, or a badge from a local audit alone.
 
-Control warm-up, caching, background load, clock and profiler effects, network variability, autoscaling, cloud tenancy, thermal behavior, and resource saturation. Report distributions rather than a selected best run.
+## Failure modes
 
-### Empirical software engineering
+Reject or revise a record that:
 
-Preserve repository snapshots and mining queries. Address forks, mirrors, bots, generated files, project size, survivorship, temporal leakage, and dependence within organizations or ecosystems.
+- treats a retrospective plan as prospective;
+- advances past a pilot stop decision;
+- marks a run complete without raw-output bytes;
+- lets a failed or exploratory run satisfy definitive execution;
+- reports a result from missing, changed, or non-complete inputs;
+- omits uncertainty or robustness for an active quantitative result;
+- selects the best seed or metric without a prospective rule;
+- hides failed or adverse runs;
+- changes analysis after observing results without recording a deviation;
+- calls internal consistency independent reproduction;
+- claims a badge or reproducibility status without current external evaluation.
 
-### Security work
-
-Use isolated authorized environments, a threat model, safe handling of exploit artifacts, and a disclosure plan. Do not publish operational details that create disproportionate harm.
-
-### Formal work
-
-Check definitions, theorem dependencies, proof obligations, boundary cases, counterexamples, executable specifications, and mechanized assumptions. A passing proof assistant checks the formalized statement, not whether the formalization matches the intended claim.
-
-## Adversarial checks
-
-Before accepting an experimental result, test for:
-
-- hidden test-set use;
-- favorable seed, prompt, metric, or subset selection;
-- baseline handicapping or unequal budgets;
-- unverifiable screenshots or copied summary values;
-- missing raw outputs;
-- result files modified after analysis;
-- code or data version ambiguity;
-- silent exclusion of crashes or timeouts;
-- confidence intervals computed from the wrong unit;
-- exploratory analyses described as confirmatory;
-- robustness claims based on cosmetic variations;
-- conclusions that extend beyond the tested versions or environments.
-
-Re-open the relevant gate when a material check fails.
+Reproducibility controls increase inspectability; they do not by themselves prove scientific validity.
