@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -23,6 +24,9 @@ ID_PATTERNS = {
     "run_id": re.compile(r"^E\d{4}$"),
     "result_id": re.compile(r"^R\d{4}$"),
     "claim_id": re.compile(r"^C\d{4}$"),
+    "finding_id": re.compile(r"^F\d{4}$"),
+    "revision_id": re.compile(r"^V\d{4}$"),
+    "search_id": re.compile(r"^Q\d{4}$"),
 }
 
 
@@ -34,37 +38,114 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def ensure_regular_file(path: Path, *, max_bytes: int = 10_000_000) -> os.stat_result:
-    try:
-        info = path.lstat()
-    except FileNotFoundError as exc:
-        raise ValidationError(f"missing file: {path}") from exc
-    if stat.S_ISLNK(info.st_mode):
-        raise ValidationError(f"linked file is not allowed: {path}")
+def _validate_stat(info: os.stat_result, path: Path, max_bytes: int) -> None:
     if not stat.S_ISREG(info.st_mode):
         raise ValidationError(f"not a regular file: {path}")
     if info.st_nlink != 1:
         raise ValidationError(f"hard-linked file is not allowed: {path}")
     if info.st_size > max_bytes:
         raise ValidationError(f"file exceeds {max_bytes} bytes: {path}")
-    return info
+
+
+def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _same_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        left.st_dev,
+        left.st_ino,
+        left.st_size,
+        getattr(left, "st_mtime_ns", int(left.st_mtime * 1_000_000_000)),
+    ) == (
+        right.st_dev,
+        right.st_ino,
+        right.st_size,
+        getattr(right, "st_mtime_ns", int(right.st_mtime * 1_000_000_000)),
+    )
+
+
+def _open_regular(path: Path, *, max_bytes: int) -> tuple[int, os.stat_result]:
+    try:
+        before = path.lstat()
+    except FileNotFoundError as exc:
+        raise ValidationError(f"missing file: {path}") from exc
+    if stat.S_ISLNK(before.st_mode):
+        raise ValidationError(f"linked file is not allowed: {path}")
+    _validate_stat(before, path, max_bytes)
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValidationError(f"cannot open regular file {path}: {exc}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        _validate_stat(opened, path, max_bytes)
+        if not _same_identity(before, opened):
+            raise ValidationError(f"file identity changed while opening: {path}")
+        return descriptor, opened
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def ensure_regular_file(path: Path, *, max_bytes: int = 10_000_000) -> os.stat_result:
+    descriptor, opened = _open_regular(path, max_bytes=max_bytes)
+    os.close(descriptor)
+    return opened
+
+
+def read_bytes(path: Path, *, max_bytes: int = 10_000_000) -> bytes:
+    descriptor, before = _open_regular(path, max_bytes=max_bytes)
+    try:
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes - total + 1))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValidationError(f"file exceeds {max_bytes} bytes while reading: {path}")
+        after = os.fstat(descriptor)
+        if not _same_snapshot(before, after):
+            raise ValidationError(f"file changed while being read: {path}")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def read_text(path: Path, *, max_bytes: int = 10_000_000) -> str:
-    before = ensure_regular_file(path, max_bytes=max_bytes)
-    data = path.read_bytes()
-    after = path.lstat()
-    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-    ):
-        raise ValidationError(f"file changed while being read: {path}")
+    data = read_bytes(path, max_bytes=max_bytes)
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValidationError(f"file is not UTF-8: {path}") from exc
+
+
+def sha256_file(path: Path, *, max_bytes: int = 1_000_000_000) -> str:
+    descriptor, before = _open_regular(path, max_bytes=max_bytes)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValidationError(f"file exceeds {max_bytes} bytes while hashing: {path}")
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if not _same_snapshot(before, after):
+            raise ValidationError(f"file changed while being hashed: {path}")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -98,11 +179,10 @@ def write_json_new(path: Path, value: Any) -> None:
 
 def read_csv(path: Path, *, max_bytes: int = 5_000_000) -> tuple[list[str], list[dict[str, str]]]:
     text = read_text(path, max_bytes=max_bytes)
-    lines = text.splitlines()
-    if not lines:
+    if not text:
         raise ValidationError(f"empty CSV: {path}")
     try:
-        reader = csv.DictReader(lines, strict=True)
+        reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
         headers = reader.fieldnames or []
         if not headers or any(not header for header in headers):
             raise ValidationError(f"invalid CSV header: {path}")
@@ -127,25 +207,15 @@ def split_ids(value: str) -> list[str]:
     return [item.strip() for item in re.split(r"[;,\s]+", value or "") if item.strip()]
 
 
-def sha256_file(path: Path) -> str:
-    ensure_regular_file(path, max_bytes=1_000_000_000)
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def has_placeholder(text: str) -> bool:
     return bool(PLACEHOLDER_RE.search(text))
 
 
 def within(root: Path, candidate: Path) -> bool:
-    root_resolved = root.resolve()
     try:
-        candidate.resolve().relative_to(root_resolved)
+        candidate.resolve().relative_to(root.resolve())
         return True
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
@@ -155,8 +225,3 @@ def nonempty_without_placeholder(path: Path) -> bool:
     except ValidationError:
         return False
     return bool(text.strip()) and not has_placeholder(text)
-
-
-def safe_cell(value: str) -> str:
-    """Neutralize spreadsheet formulas in generated CSV cells."""
-    return "'" + value if value.startswith(("=", "+", "-", "@")) else value
