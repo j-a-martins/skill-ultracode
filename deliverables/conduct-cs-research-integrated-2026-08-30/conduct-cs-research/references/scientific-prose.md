@@ -3,173 +3,165 @@
 ## Contents
 
 1. Revision modes
-2. Faithfulness contract
-3. Protected content
-4. Section-aware revision
-5. Information flow
-6. Workflow
-7. Output contract
-8. Prohibited transformations
-9. Drift audit
+2. Establish the scientific contract
+3. Protect immutable content
+4. Revise information flow
+5. Preserve epistemic force and logical direction
+6. Handle citations and LaTeX
+7. Audit the actual file pair
+8. Report material changes and residual concerns
+9. Failure modes
 
 ## Revision modes
 
-Choose the requested depth:
+Choose the narrowest mode:
 
-- `copyedit`: grammar, punctuation, spelling, consistency, and local clarity.
-- `line-edit`: sentence structure, concision, emphasis, and transitions.
-- `substantive-edit`: paragraph and section organization while preserving the scientific argument.
-- `section-calibration`: adapt rhetorical moves to abstract, introduction, methods, results, discussion, conclusion, cover letter, or reviewer response.
-- `venue-calibration`: conform to current target-venue style and length without imitating a named author's distinctive style.
-- `plain-language`: explain the same evidence to a specified non-specialist audience.
-- `translation`: translate when requested while preserving technical meaning and flagging terms without safe equivalents.
+- **copyedit** — grammar, spelling, punctuation, and local concision;
+- **line edit** — sentence structure, cohesion, emphasis, and information flow;
+- **substantive restructure** — paragraph or section reorganization while preserving the scientific contract;
+- **plain-language version** — communicate the same evidence to a specified nonexpert audience;
+- **translation** — translate when requested while preserving scientific meaning, notation, and citation scope;
+- **venue calibration** — adapt register and structure to current journal instructions without changing the evidence.
 
-Do not assume that more rewriting is better. Apply the smallest change that achieves the stated purpose.
+Do not silently change the research question, methods, analysis, results, limitations, or contribution. When scientific repair is needed, separate it from the prose edit and request authorization.
 
-## Faithfulness contract
+## Establish the scientific contract
 
-Unless the user explicitly authorizes a scientific change, preserve:
+Before revising, identify:
 
-- factual propositions and their scope;
-- numbers, signs, decimal precision, units, dates, sample sizes, and identifiers;
-- equations, symbols, notation, and logical operators;
-- citations, citation scope, and cross-references;
-- code, variable, dataset, model, benchmark, and method names;
-- causal versus associative language;
-- modal strength, uncertainty, confidence, and limitation language;
-- negation, comparison direction, temporal order, and conditionality;
-- terminology identity across the manuscript;
-- distinctions between observed results, interpretation, and speculation.
+- section type and rhetorical purpose;
+- intended audience and target venue if relevant;
+- claims and their support;
+- facts supplied by the user;
+- numbers, signs, units, ranges, uncertainty, and statistical language;
+- causal versus associational force;
+- conditions, exceptions, scope, direction, and comparison class;
+- citations and the exact text each citation supports;
+- equations, algorithms, code identifiers, labels, references, and user-defined macros;
+- terminology and abbreviations;
+- quotations and legally or ethically sensitive wording;
+- explicit instructions about permissible scientific change.
 
-Never add a fact, result, citation, method, participant characteristic, author experience, or claim merely to improve flow.
+If the source is ambiguous, do not resolve the ambiguity by guessing. Preserve it or flag it separately.
 
-## Protected content
+## Protect immutable content
 
-Before editing technical material, inventory protected spans:
+Treat the following as protected unless the user explicitly authorizes a scientific change:
 
-- LaTeX commands, environments, labels, references, citations, and math;
-- inline and fenced code;
-- URLs, DOIs, accession numbers, commit hashes, and persistent identifiers;
-- table and figure values;
-- quotations;
-- defined terms and abbreviations;
-- legal, ethical, disclosure, funding, and authorship statements.
+- numerical values and their signs;
+- units and scale;
+- equations, mathematical operators, inequalities, and complexity statements;
+- p-values, intervals, uncertainty measures, thresholds, and significance status;
+- citation keys, citation commands, optional page locators, and citation scope;
+- LaTeX labels, cross-references, macro names, and code spans;
+- URLs, DOIs, dataset IDs, model names, variable names, and software versions;
+- negation, polarity, direction, temporal order, and comparison direction;
+- causal strength, modality, hedging, and certainty;
+- conditions, exceptions, inclusion or exclusion scope, and boundary cases;
+- limitations, null results, contradictions, and adverse findings.
 
-Keep protected spans verbatim unless the requested task specifically includes them. When a protected span appears erroneous, flag it rather than silently changing it.
+Build `manuscript/protected-spans.txt` for governed work. Record `None` only after an actual inventory.
 
-## Section-aware revision
+## Revise information flow
 
-### Title
-
-Preserve the supported contribution and study type. Avoid universal, causal, first, best, or state-of-the-art claims without evidence.
-
-### Abstract
-
-Maintain objective, method, principal results with uncertainty, and calibrated conclusion. Do not introduce background claims or results absent from the manuscript. Respect the current venue structure and word limit.
-
-### Introduction
-
-Move from established context to the precise unresolved problem, nearest work, gap, and contribution. Do not create a straw-man gap. Keep contribution language consistent with the evidence and related-work audit.
-
-### Related work
-
-Organize by comparison logic or debate, not one-paper-per-sentence listing. Preserve contrary and predecessor work. Distinguish factual descriptions from the author's synthesis.
-
-### Methods
-
-Prioritize reproducibility and decision rationale. Preserve procedural order, parameters, exclusions, materials, and preregistered distinctions. Passive voice is acceptable when the actor is irrelevant; active voice is preferable when responsibility matters.
-
-### Results
-
-Lead with the question and result, report uncertainty, and separate observation from explanation. Do not replace precise values with adjectives or convert exploratory results into confirmatory claims.
-
-### Discussion
-
-Interpret results against the question and prior evidence, then address mechanisms, limitations, external validity, and implications. Keep speculation marked. Do not repeat every result.
-
-### Conclusion
-
-State the supported contribution and boundary. Do not add future impact, deployment, or policy claims unsupported by the study.
-
-### Reviewer response
-
-Answer the concern, state the action, cite the exact change, and provide evidence. Avoid defensive rhetoric and unsupported claims that the reviewer is satisfied.
-
-## Information flow
-
-Use these principles selectively:
+Use information structure deliberately:
 
 - place familiar context before new information;
-- place the sentence's intended emphasis near the end when natural;
-- keep subjects and main verbs close enough to expose agency and logic;
-- use stable terminology for stable concepts;
-- give each paragraph one main rhetorical job;
-- connect paragraphs through repeated concepts rather than generic transitions;
-- prefer concrete verbs and explicit agents when they clarify responsibility;
-- delete nominalizations, throat-clearing, empty intensifiers, and redundant metadiscourse;
-- vary sentence structure for logic, not to appear human;
-- retain legitimate disciplinary conventions.
+- put the sentence’s main action in the grammatical core;
+- keep the topic near the beginning and the stress-bearing contribution near the end;
+- keep each paragraph focused on one rhetorical job;
+- make links between problem, method, evidence, and implication explicit;
+- prefer concrete agents and operations when they improve clarity;
+- retain passive voice when the procedure, object, or result is the appropriate topic;
+- remove repetition that does not carry a distinction;
+- preserve technical terms when a simpler synonym would change meaning.
 
-Do not enforce blanket bans on passive voice, first person, long sentences, or field-specific terminology.
+Do not apply blanket style rules such as deleting all passive voice, all nominalizations, all hedges, or all long sentences.
 
-## Workflow
+## Preserve epistemic force and logical direction
 
-1. Confirm audience, section, venue, revision depth, language, and whether a change log is needed.
-2. Extract the claim inventory and protected spans.
-3. Separate writing defects from scientific defects.
-4. Revise structure before sentences when substantive editing is authorized.
-5. Revise sentences for clarity, precision, cohesion, and concision.
-6. Run a semantic-drift audit.
-7. Return the clean revision and list unresolved scientific concerns outside the prose.
+Check every revision for semantic drift:
 
-For files, preserve encoding and line endings when practical. Never overwrite the only copy without explicit authorization. For LaTeX, edit source rather than reconstructed rendered text.
+- `increased`, `higher`, `improved`, `positive`, `before`, and `supports` must not become their opposites;
+- association must not become causation;
+- possibility must not become proof;
+- a conditional claim must not become unconditional;
+- a subset must not become a population-wide statement;
+- a negative or nonsignificant result must not become positive or significant;
+- “consistent with” must not become “confirms” without stronger evidence;
+- temporal order and method sequence must remain intact;
+- limitations and uncertainty must remain visible.
 
-## Output contract
+Synonymous wording within the same direction is acceptable when the scientific relation is unchanged. A direction, scope, or certainty change is a scientific change even when every number remains identical.
 
-Default output:
+## Handle citations and LaTeX
 
-1. the revised text only;
-2. a short `Residual concerns` section only when scientific ambiguity, missing evidence, or a possible source error remains.
+For citations:
 
-When requested, add:
+- preserve cite keys and optional locators;
+- preserve the clause or proposition supported by each citation;
+- do not move a citation from a narrow claim to a whole paragraph without checking the source;
+- do not add a plausible-looking reference;
+- route new or changed citations through source verification.
 
-- a concise change log;
-- side-by-side original and revision;
-- rationale for major structural changes;
-- protected-content audit results;
-- alternative phrasings for genuinely ambiguous passages.
+For LaTeX:
 
-Do not burden a routine copyedit with a large editorial report.
+- preserve citation, label, reference, and user-macro syntax;
+- do not rewrite equations or algorithmic identifiers as prose;
+- do not alter table or figure cross-references without checking the target;
+- edit source files rather than reconstructed PDF text when possible;
+- compile in a restricted no-shell-escape environment after static audit;
+- inspect the rendered output after source changes.
 
-## Prohibited transformations
+## Audit the actual file pair
 
-Do not:
+A revision log is not evidence unless it identifies the current original and revised bytes. For each revision record:
 
-- strengthen association into causation;
-- replace `may`, `might`, or `suggests` with certainty without evidence;
-- remove limitations, caveats, null results, or adverse findings to sound persuasive;
-- reverse negation or comparison direction;
-- change numbers, units, precision, or denominators;
-- move a citation so that it appears to support a different claim;
-- invent a missing transition fact;
-- hide plagiarism, patchwriting, fabricated evidence, or ethical concerns behind polish;
-- optimize for authorship-detector evasion or promise a detector outcome;
-- imitate the distinctive style of a living author or reproduce copyrighted wording from a target paper;
-- translate terminology mechanically when the target-language term changes the construct.
+- assign `V####`;
+- record project-relative original and revised paths;
+- record SHA-256 for both;
+- state scope and protected content;
+- state material scientific changes, if any;
+- state residual concerns;
+- record deterministic audit status and final review status.
 
-## Drift audit
+Run:
 
-Use `scripts/audit_prose.py` for a conservative mechanical check, then read both versions. Check:
+```text
+python scripts/audit_prose.py ORIGINAL REVISED --strict --json
+```
 
-- number and unit identity;
-- citation, label, and cross-reference identity;
-- math and code identity;
-- negation and comparison direction;
-- causal verbs and certainty markers added;
-- uncertainty markers removed;
-- claim boundaries, conditions, and populations changed;
-- terminology drift;
-- sentence mergers that alter citation scope;
-- omissions of qualifications or contradictory evidence.
+The audit checks protected tokens, direction, polarity, temporal order, support versus contradiction, conditions, scope markers, causal strength, uncertainty, citation placement, and LaTeX macros. It is conservative and cannot prove semantic equivalence.
 
-Mechanical equality is not semantic equivalence, and mechanical differences are not always errors. Resolve flagged differences against the author's intended meaning and evidence.
+If strict audit fails because an authorized scientific change is intentional, record `manual-accepted` only with a specific material-change rationale and residual-risk explanation. Do not use manual acceptance to conceal an unexamined drift.
+
+## Report material changes and residual concerns
+
+Return the requested clean revision. Separately report only material items:
+
+- scientific changes explicitly authorized;
+- ambiguities preserved or flagged;
+- suspected factual or methodological defects in the source;
+- citations requiring verification;
+- unresolved semantic-drift warnings;
+- venue constraints that could not be verified.
+
+Do not present copyediting as scientific validation.
+
+## Failure modes
+
+Reject or revise an edit that:
+
+- changes a number, sign, unit, equation, identifier, or citation without authorization;
+- reverses direction, polarity, time order, or support relation;
+- removes a condition, exception, or limitation;
+- changes association to causation;
+- removes uncertainty to sound confident;
+- moves citation scope without checking the source;
+- hides a missing control or design defect through polished language;
+- invents a citation or fact;
+- promises detector evasion or exact imitation of a living author’s distinctive style;
+- breaks LaTeX macros or references;
+- records a passing revision audit without binding the actual file bytes.
+
+The purpose is clearer scientific communication with preserved meaning, not stronger-sounding claims.
