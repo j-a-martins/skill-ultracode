@@ -1,20 +1,41 @@
-name: Build final-audited conduct-cs-research release
+name: Build software-engineered conduct-cs-research release
 
 on:
   push:
     branches:
-      - artifact/conduct-cs-research-final-audit-20260830
+      - artifact/conduct-cs-research-software-engineering-20260830
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  validate-and-package:
+  compatibility:
+    name: Full gate on Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
-      - name: Check out final-audit branch
+      - name: Check out software-engineering branch
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run complete software-engineering release gate
+        run: python deliverables/conduct-cs-research-integrated-2026-08-30/tools/software_engineering_release.py
+
+  validate-and-package:
+    needs: compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out software-engineering branch
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up Python
@@ -22,13 +43,29 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Run final validation, adversarial tests, overengineering checks, and packaging
-        run: python deliverables/conduct-cs-research-integrated-2026-08-30/tools/final_release.py
+      - name: Check out pinned OpenAI skill-creator validator
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: openai/skills
+          ref: 49f948faa9258a0c61caceaf225e179651397431
+          path: .openai-skills
+          persist-credentials: false
+          sparse-checkout: skills/.system/skill-creator/scripts/quick_validate.py
+          sparse-checkout-cone-mode: false
+
+      - name: Install build-only validator dependency
+        run: python -m pip install --disable-pip-version-check --no-deps PyYAML==6.0.2
+
+      - name: Run official OpenAI quick validator
+        run: python .openai-skills/skills/.system/skill-creator/scripts/quick_validate.py deliverables/conduct-cs-research-integrated-2026-08-30/conduct-cs-research
+
+      - name: Run final software-engineering gate and package
+        run: python deliverables/conduct-cs-research-integrated-2026-08-30/tools/software_engineering_release.py
 
       - name: Upload certified release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: conduct-cs-research-final-audited-2026-08-30
+          name: conduct-cs-research-software-engineered-2026-08-30
           path: deliverables/conduct-cs-research-integrated-2026-08-30/release/*
           if-no-files-found: error
           retention-days: 30
