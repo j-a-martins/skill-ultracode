@@ -301,7 +301,6 @@ CSV_REQUIREMENTS = {
 }
 
 MANUSCRIPT_CLAIM_STATUSES = {"active", "needs-review"}
-SHIP_READY_CLAIM_STATUSES = {"active"}
 INACTIVE_CLAIM_STATUSES = {"withdrawn", "rejected", "superseded"}
 RESULT_STATUSES = {
     "draft",
@@ -323,7 +322,8 @@ SOURCE_STATUSES = {
     "withdrawn",
     "retracted",
 }
-SOURCE_INELIGIBLE = {"candidate", "excluded", "unresolved", "withdrawn"}
+CLAIM_ELIGIBLE_SOURCE_STATUSES = {"verified", "corrected"}
+SOURCE_INELIGIBLE = {"candidate", "included", "excluded", "unresolved", "withdrawn"}
 EVIDENCE_LEVELS = {"metadata", "abstract", "full-text", "data", "code", "artifact"}
 FINDING_SEVERITIES = {"design-limiting", "major", "minor", "editorial", "strength"}
 FINDING_STATUSES = {
