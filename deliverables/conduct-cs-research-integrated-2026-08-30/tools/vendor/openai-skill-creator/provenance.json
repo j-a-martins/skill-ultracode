@@ -1,0 +1,12 @@
+{
+  "repository": "openai/skills",
+  "commit": "49f948faa9258a0c61caceaf225e179651397431",
+  "quick_validate": {
+    "path": "skills/.system/skill-creator/scripts/quick_validate.py",
+    "git_blob_sha1": "0547b4041a5f58fa19892079a114a1df98286406"
+  },
+  "skill_creator": {
+    "path": "skills/.system/skill-creator/SKILL.md",
+    "git_blob_sha1": "72bc0b97e7a6476254a9d5c424c9971748402ec3"
+  }
+}
