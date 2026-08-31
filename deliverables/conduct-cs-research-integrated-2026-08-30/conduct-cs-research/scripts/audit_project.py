@@ -4,16 +4,21 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
+import audit_prose
 from _common import (
     DEFAULT_MAX_DEPTH,
     DEFAULT_MAX_ENTRIES,
     DEFAULT_MAX_TOTAL_BYTES,
+    SHA256_RE,
     ValidationError,
     load_json,
+    read_project_bytes,
+    read_text,
     scan_tree,
     split_ids,
 )
@@ -106,7 +111,7 @@ def _check_screening_source_consistency(
     rows: list[dict[str, str]], errors: list[str]
 ) -> None:
     by_record: dict[str, dict[str, set[str]]] = {}
-    for index, row in enumerate(rows, start=2):
+    for row in rows:
         record_id = row.get("record_id", "").strip()
         stage = row.get("stage", "").strip().lower()
         if not record_id or stage not in {"title-abstract", "full-text"}:
@@ -118,6 +123,82 @@ def _check_screening_source_consistency(
                 errors.append(
                     f"screening record {record_id!r} changes source_ids between title-abstract and full-text stages"
                 )
+
+
+def _decode_verified_project_text(
+    root: Path,
+    row: dict[str, str],
+    path_field: str,
+    hash_field: str,
+    prefix: str,
+    errors: list[str],
+) -> str | None:
+    raw_path = row.get(path_field, "").strip()
+    expected = row.get(hash_field, "").strip().lower()
+    if not raw_path or not SHA256_RE.fullmatch(expected):
+        return None
+    try:
+        data = read_project_bytes(root, raw_path)
+    except ValidationError as exc:
+        errors.append(f"{prefix}: {exc}")
+        return None
+    if hashlib.sha256(data).hexdigest() != expected:
+        errors.append(f"{prefix}: {path_field} hash does not match audited bytes")
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        errors.append(f"{prefix}: {path_field} is not UTF-8")
+        return None
+
+
+def _check_revision_semantics(
+    root: Path,
+    revisions: list[dict[str, str]],
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    if not revisions:
+        return
+    try:
+        spans = audit_prose.parse_protected_spans(
+            read_text(root / "manuscript/protected-spans.txt")
+        )
+    except ValidationError as exc:
+        errors.append(f"manuscript/protected-spans.txt: {exc}")
+        return
+    for index, row in enumerate(revisions, start=2):
+        prefix = f"manuscript/revision-log.csv:{index}"
+        original = _decode_verified_project_text(
+            root, row, "source_path", "source_sha256", prefix, errors
+        )
+        revised = _decode_verified_project_text(
+            root, row, "revised_path", "revised_sha256", prefix, errors
+        )
+        if original is None or revised is None:
+            continue
+        result = audit_prose.audit_text(
+            original,
+            revised,
+            strict=True,
+            protected_spans=spans,
+        )
+        audit_status = row.get("audit_status", "").strip().lower()
+        if result["passed"]:
+            if audit_status == "fail":
+                errors.append(f"{prefix}: audit_status says fail but protected semantic audit passes")
+            continue
+        if audit_status != "manual-accepted":
+            errors.append(f"{prefix}: protected semantic audit failed: {result['errors']}")
+            continue
+        material = row.get("material_changes", "").strip().lower()
+        concerns = row.get("residual_concerns", "").strip().lower()
+        if material in {"", "none"} or concerns in {"", "none"}:
+            errors.append(
+                f"{prefix}: manual acceptance requires a specific material-change rationale and residual concerns"
+            )
+        else:
+            warnings.append(f"{prefix}: protected semantic drift was manually accepted")
 
 
 def _validate_records(
@@ -151,6 +232,7 @@ def _validate_records(
     unresolved_responses = check_responses(responses, errors)
     revisions = tables.get("manuscript/revision-log.csv", [])
     check_revisions(root, revisions, errors, warnings)
+    _check_revision_semantics(root, revisions, errors, warnings)
     check_external_actions(root, state, errors, warnings)
     return {
         "sources": sources,
