@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
@@ -33,6 +34,14 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DEFAULT_MAX_ENTRIES = 10_000
 DEFAULT_MAX_DEPTH = 32
 DEFAULT_MAX_TOTAL_BYTES = 1_000_000_000
+WINDOWS_DEVICES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 class ValidationError(ValueError):
@@ -115,6 +124,116 @@ def _open_regular(path: Path, *, max_bytes: int) -> tuple[int, os.stat_result]:
         raise
 
 
+def _project_parts(raw: str) -> tuple[str, ...]:
+    if not isinstance(raw, str) or raw != raw.strip() or not raw or "\x00" in raw or "\\" in raw:
+        raise ValidationError(f"invalid project-relative path: {raw!r}")
+    if unicodedata.normalize("NFC", raw) != raw:
+        raise ValidationError(f"project-relative path is not NFC-normalized: {raw!r}")
+    raw_parts = raw.split("/")
+    pure = PurePosixPath(raw)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in raw_parts):
+        raise ValidationError(f"unsafe project-relative path: {raw!r}")
+    for part in raw_parts:
+        if part.rstrip(" .") != part or ":" in part:
+            raise ValidationError(f"non-portable project-relative path: {raw!r}")
+        if part.split(".", 1)[0].upper() in WINDOWS_DEVICES:
+            raise ValidationError(f"Windows-reserved project-relative path: {raw!r}")
+    return tuple(raw_parts)
+
+
+def _secure_dir_fd_supported() -> bool:
+    return (
+        os.open in getattr(os, "supports_dir_fd", set())
+        and hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "O_NOFOLLOW")
+    )
+
+
+def _open_project_regular(
+    root: Path,
+    raw: str,
+    *,
+    max_bytes: int,
+) -> tuple[int, os.stat_result, Path]:
+    parts = _project_parts(raw)
+    candidate = root.joinpath(*parts)
+    try:
+        root_before = root.lstat()
+    except FileNotFoundError as exc:
+        raise ValidationError(f"missing project root: {root}") from exc
+    if stat.S_ISLNK(root_before.st_mode) or not stat.S_ISDIR(root_before.st_mode):
+        raise ValidationError(f"not a regular project directory: {root}")
+
+    if not _secure_dir_fd_supported():
+        current = root
+        for part in parts[:-1]:
+            current = current / part
+            try:
+                info = current.lstat()
+            except FileNotFoundError as exc:
+                raise ValidationError(f"missing project directory component: {current}") from exc
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise ValidationError(f"linked or non-directory project component: {current}")
+        descriptor, opened = _open_regular(candidate, max_bytes=max_bytes)
+        return descriptor, opened, candidate
+
+    directory_flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | getattr(os, "O_CLOEXEC", 0)
+        | os.O_NOFOLLOW
+    )
+    file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
+    directories: list[int] = []
+    try:
+        root_fd = os.open(root, directory_flags)
+        directories.append(root_fd)
+        root_opened = os.fstat(root_fd)
+        if not stat.S_ISDIR(root_opened.st_mode) or not _same_identity(root_before, root_opened):
+            raise ValidationError(f"project root identity changed while opening: {root}")
+        current_fd = root_fd
+        for part in parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            directories.append(next_fd)
+            if not stat.S_ISDIR(os.fstat(next_fd).st_mode):
+                raise ValidationError(f"non-directory project component in {raw!r}")
+            current_fd = next_fd
+        descriptor = os.open(parts[-1], file_flags, dir_fd=current_fd)
+        opened = os.fstat(descriptor)
+        _validate_stat(opened, candidate, max_bytes)
+        return descriptor, opened, candidate
+    except OSError as exc:
+        raise ValidationError(f"cannot securely open project file {raw!r}: {exc}") from exc
+    finally:
+        for directory_fd in reversed(directories):
+            try:
+                os.close(directory_fd)
+            except OSError:
+                pass
+
+
+def _read_descriptor(
+    descriptor: int,
+    before: os.stat_result,
+    path: Path,
+    max_bytes: int,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, min(1024 * 1024, max_bytes - total + 1))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValidationError(f"file exceeds {max_bytes} bytes while reading: {path}")
+    after = os.fstat(descriptor)
+    if not _same_snapshot(before, after):
+        raise ValidationError(f"file changed while being read: {path}")
+    return b"".join(chunks)
+
+
 def ensure_regular_file(path: Path, *, max_bytes: int = 10_000_000) -> os.stat_result:
     descriptor, opened = _open_regular(path, max_bytes=max_bytes)
     os.close(descriptor)
@@ -124,20 +243,7 @@ def ensure_regular_file(path: Path, *, max_bytes: int = 10_000_000) -> os.stat_r
 def read_bytes(path: Path, *, max_bytes: int = 10_000_000) -> bytes:
     descriptor, before = _open_regular(path, max_bytes=max_bytes)
     try:
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = os.read(descriptor, min(1024 * 1024, max_bytes - total + 1))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
-            if total > max_bytes:
-                raise ValidationError(f"file exceeds {max_bytes} bytes while reading: {path}")
-        after = os.fstat(descriptor)
-        if not _same_snapshot(before, after):
-            raise ValidationError(f"file changed while being read: {path}")
-        return b"".join(chunks)
+        return _read_descriptor(descriptor, before, path, max_bytes)
     finally:
         os.close(descriptor)
 
@@ -148,6 +254,32 @@ def read_text(path: Path, *, max_bytes: int = 10_000_000) -> str:
         return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValidationError(f"file is not UTF-8: {path}") from exc
+
+
+def read_project_bytes(
+    root: Path,
+    raw: str,
+    *,
+    max_bytes: int = 10_000_000,
+) -> bytes:
+    descriptor, before, candidate = _open_project_regular(root, raw, max_bytes=max_bytes)
+    try:
+        return _read_descriptor(descriptor, before, candidate, max_bytes)
+    finally:
+        os.close(descriptor)
+
+
+def read_project_text(
+    root: Path,
+    raw: str,
+    *,
+    max_bytes: int = 10_000_000,
+) -> str:
+    data = read_project_bytes(root, raw, max_bytes=max_bytes)
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValidationError(f"project file is not UTF-8: {raw}") from exc
 
 
 def sha256_file(path: Path, *, max_bytes: int = DEFAULT_MAX_TOTAL_BYTES) -> str:
@@ -166,6 +298,32 @@ def sha256_file(path: Path, *, max_bytes: int = DEFAULT_MAX_TOTAL_BYTES) -> str:
         after = os.fstat(descriptor)
         if not _same_snapshot(before, after):
             raise ValidationError(f"file changed while being hashed: {path}")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def sha256_project_file(
+    root: Path,
+    raw: str,
+    *,
+    max_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+) -> str:
+    descriptor, before, candidate = _open_project_regular(root, raw, max_bytes=max_bytes)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValidationError(f"file exceeds {max_bytes} bytes while hashing: {candidate}")
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if not _same_snapshot(before, after):
+            raise ValidationError(f"file changed while being hashed: {candidate}")
         return digest.hexdigest()
     finally:
         os.close(descriptor)
@@ -327,17 +485,12 @@ def project_path(
     must_exist: bool = True,
     max_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
 ) -> Path:
-    """Resolve a portable project-relative regular-file path beneath root."""
-    if not isinstance(raw, str) or not raw.strip() or "\x00" in raw or "\\" in raw:
-        raise ValidationError(f"invalid project-relative path: {raw!r}")
-    pure = PurePosixPath(raw.strip())
-    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
-        raise ValidationError(f"unsafe project-relative path: {raw!r}")
-    candidate = root.joinpath(*pure.parts)
-    if not within(root, candidate):
-        raise ValidationError(f"project path escapes root: {raw!r}")
+    """Return a portable project-relative path after secure existence checks."""
+    parts = _project_parts(raw)
+    candidate = root.joinpath(*parts)
     if must_exist:
-        ensure_regular_file(candidate, max_bytes=max_bytes)
+        descriptor, _, _ = _open_project_regular(root, raw, max_bytes=max_bytes)
+        os.close(descriptor)
     return candidate
 
 
@@ -345,8 +498,8 @@ def verify_path_hash(root: Path, raw_path: str, raw_hash: str, *, label: str) ->
     expected = (raw_hash or "").lower()
     if not SHA256_RE.fullmatch(expected):
         raise ValidationError(f"{label} has invalid sha256")
-    candidate = project_path(root, raw_path)
-    actual = sha256_file(candidate)
+    candidate = project_path(root, raw_path, must_exist=False)
+    actual = sha256_project_file(root, raw_path)
     if actual != expected:
         raise ValidationError(f"{label} hash does not match current bytes")
     return candidate
