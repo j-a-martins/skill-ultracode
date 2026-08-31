@@ -60,7 +60,7 @@ Treat the following as protected unless the user explicitly authorizes a scienti
 - conditions, exceptions, inclusion or exclusion scope, and boundary cases;
 - limitations, null results, contradictions, and adverse findings.
 
-Build `manuscript/protected-spans.txt` for governed work. Record `None` only after an actual inventory.
+For governed work, put one exact literal protected span on each noncomment line of `manuscript/protected-spans.txt`. Lines beginning with `#` are comments. Write exactly `None` only after confirming that no additional literal span needs protection; do not mix `None` with span lines. The deterministic auditor requires every listed span to occur in the original and to retain the same occurrence count in the revision.
 
 ## Revise information flow
 
@@ -92,7 +92,7 @@ Check every revision for semantic drift:
 - temporal order and method sequence must remain intact;
 - limitations and uncertainty must remain visible.
 
-Synonymous wording within the same direction is acceptable when the scientific relation is unchanged. A direction, scope, or certainty change is a scientific change even when every number remains identical.
+Synonymous wording within the same direction is acceptable when the scientific relation is unchanged. A direction, scope, certainty, or ownership change is a scientific change even when aggregate word counts and every number remain identical.
 
 ## Handle citations and LaTeX
 
@@ -128,12 +128,12 @@ A revision log is not evidence unless it identifies the current original and rev
 Run:
 
 ```text
-python scripts/audit_prose.py ORIGINAL REVISED --strict --json
+python scripts/audit_prose.py ORIGINAL REVISED --protected-spans manuscript/protected-spans.txt --strict --json
 ```
 
-The audit checks protected tokens, direction, polarity, temporal order, support versus contradiction, conditions, scope markers, causal strength, uncertainty, citation placement, and LaTeX macros. It is conservative and cannot prove semantic equivalence.
+The audit checks protected tokens, exact declared spans, the ordered sequence and paragraph ownership of direction, polarity, temporal order, support versus contradiction, conditions, scope markers, causal strength, uncertainty, citation placement, and LaTeX macros. It is deliberately conservative and cannot prove semantic equivalence.
 
-If strict audit fails because an authorized scientific change is intentional, record `manual-accepted` only with a specific material-change rationale and residual-risk explanation. Do not use manual acceptance to conceal an unexamined drift.
+If strict audit fails because an authorized scientific change or substantive reorganization is intentional, record `manual-accepted` only with a specific material-change rationale and residual-risk explanation. Do not use manual acceptance to conceal an unexamined drift.
 
 ## Report material changes and residual concerns
 
@@ -154,6 +154,7 @@ Reject or revise an edit that:
 
 - changes a number, sign, unit, equation, identifier, or citation without authorization;
 - reverses direction, polarity, time order, or support relation;
+- moves a semantic marker from one claim to another while preserving only aggregate counts;
 - removes a condition, exception, or limitation;
 - changes association to causation;
 - removes uncertainty to sound confident;
