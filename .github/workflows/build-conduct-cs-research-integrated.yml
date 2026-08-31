@@ -1,9 +1,9 @@
-name: Release resolved conduct-cs-research skill
+name: Release final-verified conduct-cs-research skill
 
 on:
   push:
     branches:
-      - artifact/conduct-cs-research-resolved-20260831
+      - artifact/conduct-cs-research-final-verification-20260831
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.12", "3.13"]
     steps:
-      - name: Check out resolved branch
+      - name: Check out final-verification branch
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - name: Check out resolved branch
+      - name: Check out final-verification branch
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
       - name: Set up exact packaging Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -75,7 +75,7 @@ jobs:
       - name: Upload certified release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: conduct-cs-research-software-engineered-2026-08-31
+          name: conduct-cs-research-final-verified-2026-08-31
           path: deliverables/conduct-cs-research-integrated-2026-08-30/release/*
           if-no-files-found: error
           retention-days: 30
