@@ -25,7 +25,7 @@ EVALS = ROOT / "evals"
 REPORTS = ROOT / "reports"
 TEST_FILE = ROOT / "tools/tests/test_skill.py"
 RELEASE = ROOT / "release"
-ARCHIVE_NAME = "conduct-cs-research-software-engineered-2026-08-31.zip"
+ARCHIVE_NAME = "conduct-cs-research-final-verified-2026-08-31.zip"
 ZIP_EPOCH = (2020, 1, 1, 0, 0, 0)
 OPENAI_COMMIT = "49f948faa9258a0c61caceaf225e179651397431"
 QUICK_VALIDATE_BLOB = "0547b4041a5f58fa19892079a114a1df98286406"
@@ -42,8 +42,16 @@ EXPECTED_REPORTS = {
     "software-engineering-remediation.md",
     "extended-adversarial-review-round-4.md",
     "overengineering-review-round-4.md",
+    "final-verification-review.md",
 }
-WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+WINDOWS_DEVICES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 BAN_IMPORTS = {
     "socket",
     "http.client",
@@ -80,12 +88,8 @@ def git_blob_sha(data: bytes) -> str:
     return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -97,8 +101,16 @@ def strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def reject_constant(value: str) -> Any:
+    raise ValueError(f"non-finite JSON value {value!r}")
+
+
 def load_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=strict_object)
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=strict_object,
+        parse_constant=reject_constant,
+    )
 
 
 def word_count(text: str) -> int:
@@ -126,6 +138,43 @@ def collect_files(root: Path) -> list[Path]:
     return sorted(files, key=lambda path: path.relative_to(root).as_posix())
 
 
+def capture_snapshot(files: list[Path]) -> list[tuple[str, bytes, int]]:
+    snapshot: list[tuple[str, bytes, int]] = []
+    for path in files:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValueError(f"source file changed type before capture: {path}")
+        data = path.read_bytes()
+        after = path.lstat()
+        before_state = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            getattr(before, "st_mtime_ns", int(before.st_mtime * 1_000_000_000)),
+            getattr(before, "st_ctime_ns", int(before.st_ctime * 1_000_000_000)),
+        )
+        after_state = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            getattr(after, "st_mtime_ns", int(after.st_mtime * 1_000_000_000)),
+            getattr(after, "st_ctime_ns", int(after.st_ctime * 1_000_000_000)),
+        )
+        if before_state != after_state or len(data) != before.st_size:
+            raise ValueError(f"source file changed during capture: {path}")
+        relative = path.relative_to(SKILL).as_posix()
+        mode = 0o755 if path.suffix == ".py" else 0o644
+        snapshot.append((relative, data, mode))
+    return snapshot
+
+
+def snapshot_manifest(snapshot: list[tuple[str, bytes, int]]) -> dict[str, dict[str, Any]]:
+    return {
+        relative: {"sha256": sha256_bytes(data), "bytes": len(data)}
+        for relative, data, _ in snapshot
+    }
+
+
 def parse_frontmatter(text: str) -> dict[str, str]:
     match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
     if not match:
@@ -151,9 +200,15 @@ def validate_skill_tree(gate: Gate) -> list[Path]:
         return []
     relative = {path.relative_to(SKILL).as_posix() for path in files}
     top = {name.split("/", 1)[0] for name in relative}
-    gate.check("skill/top-level-layout", top <= {"SKILL.md", "agents", "references", "scripts"}, str(sorted(top)))
+    gate.check(
+        "skill/top-level-layout",
+        top <= {"SKILL.md", "agents", "references", "scripts"},
+        str(sorted(top)),
+    )
     gate.check("skill/required-files", {"SKILL.md", "agents/openai.yaml"} <= relative)
-    nested = sorted(name for name in relative if name != "SKILL.md" and name.endswith("/SKILL.md"))
+    nested = sorted(
+        name for name in relative if name != "SKILL.md" and name.endswith("/SKILL.md")
+    )
     gate.check("skill/no-nested-skills", not nested, str(nested))
     forbidden = sorted(
         name
@@ -161,7 +216,8 @@ def validate_skill_tree(gate: Gate) -> list[Path]:
         if "__pycache__" in name
         or name.endswith((".pyc", ".pyo"))
         or "test" in Path(name).name.casefold()
-        or Path(name).name in {"README.md", "CHANGELOG.md", "INSTALLATION_GUIDE.md", "QUICK_REFERENCE.md"}
+        or Path(name).name
+        in {"README.md", "CHANGELOG.md", "INSTALLATION_GUIDE.md", "QUICK_REFERENCE.md"}
     )
     gate.check("skill/no-development-or-auxiliary-files", not forbidden, str(forbidden))
     gate.metrics["skill_files"] = len(files)
@@ -176,10 +232,15 @@ def validate_frontmatter_and_ui(gate: Gate) -> None:
     except ValueError as exc:
         gate.errors.append(str(exc))
         return
-    gate.check("metadata/keys", set(frontmatter) == {"name", "description"}, str(sorted(frontmatter)))
+    gate.check(
+        "metadata/keys", set(frontmatter) == {"name", "description"}, str(sorted(frontmatter))
+    )
     gate.check("metadata/name", frontmatter.get("name") == "conduct-cs-research")
     description = frontmatter.get("description", "")
-    gate.check("metadata/description", 1 <= len(description) <= 1024 and "<" not in description and ">" not in description)
+    gate.check(
+        "metadata/description",
+        1 <= len(description) <= 1024 and "<" not in description and ">" not in description,
+    )
     gate.check("metadata/description-words", word_count(description) <= 100, str(word_count(description)))
     ui = (SKILL / "agents/openai.yaml").read_text(encoding="utf-8")
     values = dict(re.findall(r'^\s{2}([a-z_]+):\s+"([^"]*)"\s*$', ui, re.MULTILINE))
@@ -192,12 +253,24 @@ def validate_frontmatter_and_ui(gate: Gate) -> None:
 
 def validate_progressive_disclosure(gate: Gate) -> None:
     skill_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-    linked = set(re.findall(r"\[[^\]]+\]\(((?:references|scripts)/[^)#]+)\)", skill_text))
+    linked = set(
+        re.findall(r"\[[^\]]+\]\(((?:references|scripts)/[^)#]+)\)", skill_text)
+    )
     missing = sorted(name for name in linked if not (SKILL / name).is_file())
     gate.check("disclosure/no-broken-direct-links", not missing, str(missing))
-    references = sorted(path.relative_to(SKILL).as_posix() for path in (SKILL / "references").glob("*.md"))
-    gate.check("disclosure/all-references-direct", set(references) <= linked, str(sorted(set(references) - linked)))
-    gate.check("disclosure/public-scripts-direct", PUBLIC_SCRIPTS <= linked, str(sorted(PUBLIC_SCRIPTS - linked)))
+    references = sorted(
+        path.relative_to(SKILL).as_posix() for path in (SKILL / "references").glob("*.md")
+    )
+    gate.check(
+        "disclosure/all-references-direct",
+        set(references) <= linked,
+        str(sorted(set(references) - linked)),
+    )
+    gate.check(
+        "disclosure/public-scripts-direct",
+        PUBLIC_SCRIPTS <= linked,
+        str(sorted(PUBLIC_SCRIPTS - linked)),
+    )
     nested = list((SKILL / "references").glob("*/*.md"))
     gate.check("disclosure/one-level-references", not nested, str(nested))
     no_contents = []
@@ -228,16 +301,30 @@ def validate_token_budgets(gate: Gate) -> None:
     }
     route_words: dict[str, int] = {}
     for name, limit in route_limits.items():
-        combined = skill_words + word_count((SKILL / "references" / name).read_text(encoding="utf-8"))
+        combined = skill_words + word_count(
+            (SKILL / "references" / name).read_text(encoding="utf-8")
+        )
         route_words[name] = combined
         gate.check(f"tokens/route/{name}", combined <= limit, f"{combined}>{limit}")
     workflow = word_count((SKILL / "references/workflow.md").read_text(encoding="utf-8"))
     largest_stage = max(route_words.values(), default=skill_words) - skill_words
     full_context = skill_words + workflow + largest_stage
     gate.check("tokens/full-active-stage", full_context <= 4000, str(full_context))
-    total_reference_words = sum(word_count(path.read_text(encoding="utf-8")) for path in (SKILL / "references").glob("*.md"))
+    total_reference_words = sum(
+        word_count(path.read_text(encoding="utf-8"))
+        for path in (SKILL / "references").glob("*.md")
+    )
     gate.check("tokens/total-references", total_reference_words <= 13000, str(total_reference_words))
-    gate.metrics.update({"skill_words": skill_words, "skill_bytes": skill_bytes, "skill_lines": skill_lines, "full_active_stage_words": full_context, "reference_words": total_reference_words, "route_words": route_words})
+    gate.metrics.update(
+        {
+            "skill_words": skill_words,
+            "skill_bytes": skill_bytes,
+            "skill_lines": skill_lines,
+            "full_active_stage_words": full_context,
+            "reference_words": total_reference_words,
+            "route_words": route_words,
+        }
+    )
 
 
 def import_name(node: ast.AST) -> Iterable[str]:
@@ -259,7 +346,17 @@ def dotted_call(node: ast.Call) -> str:
 
 
 def branch_count(node: ast.AST) -> int:
-    branch_types = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.BoolOp, ast.IfExp, ast.Match, ast.comprehension)
+    branch_types = (
+        ast.If,
+        ast.For,
+        ast.AsyncFor,
+        ast.While,
+        ast.Try,
+        ast.BoolOp,
+        ast.IfExp,
+        ast.Match,
+        ast.comprehension,
+    )
     return sum(isinstance(child, branch_types) for child in ast.walk(node))
 
 
@@ -282,7 +379,9 @@ def validate_runtime_code(gate: Gate) -> None:
         for node in ast.walk(tree):
             for module in import_name(node):
                 imports_seen.add(module)
-                if module in BAN_IMPORTS or any(module.startswith(name + ".") for name in BAN_IMPORTS):
+                if module in BAN_IMPORTS or any(
+                    module.startswith(name + ".") for name in BAN_IMPORTS
+                ):
                     policy_errors.append(f"{path.name}: banned import {module}")
                 root = module.split(".", 1)[0]
                 if root not in stdlib and root not in local:
@@ -301,17 +400,39 @@ def validate_runtime_code(gate: Gate) -> None:
     gate.check("code/stdlib-and-side-effect-policy", not policy_errors, str(policy_errors))
     gate.check("code/function-size", not size_errors, str(size_errors))
     gate.check("code/function-branching", not branch_errors, str(branch_errors))
-    gate.check("code/audit-orchestrator-size", (SKILL / "scripts/audit_project.py").stat().st_size <= 35000, str((SKILL / "scripts/audit_project.py").stat().st_size))
-    gate.metrics.update({"runtime_scripts": len(scripts), "runtime_imports": sorted(imports_seen)})
+    gate.check(
+        "code/audit-orchestrator-size",
+        (SKILL / "scripts/audit_project.py").stat().st_size <= 35000,
+        str((SKILL / "scripts/audit_project.py").stat().st_size),
+    )
+    gate.metrics.update(
+        {"runtime_scripts": len(scripts), "runtime_imports": sorted(imports_seen)}
+    )
 
 
 def run_tests(skill: Path, hash_seed: str) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="conduct-cs-research-pycache-") as cache:
         env = os.environ.copy()
-        env.update({"SKILL_UNDER_TEST": str(skill), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPYCACHEPREFIX": cache, "PYTHONHASHSEED": hash_seed})
-        completed = subprocess.run([sys.executable, "-B", str(TEST_FILE)], cwd=ROOT, env=env, text=True, capture_output=True, timeout=180)
+        env.update(
+            {
+                "SKILL_UNDER_TEST": str(skill),
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPYCACHEPREFIX": cache,
+                "PYTHONHASHSEED": hash_seed,
+            }
+        )
+        completed = subprocess.run(
+            [sys.executable, "-B", str(TEST_FILE)],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=180,
+        )
     if completed.returncode != 0:
-        raise RuntimeError(f"tests failed for hash seed {hash_seed}:\n{completed.stdout}\n{completed.stderr}")
+        raise RuntimeError(
+            f"tests failed for hash seed {hash_seed}:\n{completed.stdout}\n{completed.stderr}"
+        )
     for line in reversed(completed.stdout.splitlines()):
         try:
             result = json.loads(line)
@@ -331,7 +452,11 @@ def validate_evaluations(gate: Gate) -> None:
             if not raw.strip():
                 continue
             try:
-                item = json.loads(raw, object_pairs_hook=strict_object)
+                item = json.loads(
+                    raw,
+                    object_pairs_hook=strict_object,
+                    parse_constant=reject_constant,
+                )
             except Exception as exc:
                 errors.append(f"{path.name}:{line_no}: {exc}")
                 continue
@@ -343,16 +468,28 @@ def validate_evaluations(gate: Gate) -> None:
             if case_id in ids:
                 errors.append(f"duplicate evaluation id: {case_id}")
             ids.add(case_id)
-            if item["mode"] not in {None, "full-research-lifecycle", "systematic-search", "peer-review", "scientific-prose"}:
+            if item["mode"] not in {
+                None,
+                "full-research-lifecycle",
+                "systematic-search",
+                "peer-review",
+                "scientific-prose",
+            }:
                 errors.append(f"{case_id}: invalid mode")
             if item["severity"] not in {"critical", "major", "minor"}:
                 errors.append(f"{case_id}: invalid severity")
             if not isinstance(item["prompt"], str) or not item["prompt"].strip():
                 errors.append(f"{case_id}: empty prompt")
-            if not isinstance(item["expected"], list) or not item["expected"]:
-                errors.append(f"{case_id}: expected must be nonempty list")
-            if not isinstance(item["forbidden"], list):
-                errors.append(f"{case_id}: forbidden must be a list")
+            if (
+                not isinstance(item["expected"], list)
+                or not item["expected"]
+                or any(not isinstance(value, str) or not value.strip() for value in item["expected"])
+            ):
+                errors.append(f"{case_id}: expected must be a nonempty list of strings")
+            if not isinstance(item["forbidden"], list) or any(
+                not isinstance(value, str) or not value.strip() for value in item["forbidden"]
+            ):
+                errors.append(f"{case_id}: forbidden must be a list of nonempty strings")
             count += 1
             critical += item["severity"] == "critical"
     try:
@@ -364,28 +501,53 @@ def validate_evaluations(gate: Gate) -> None:
     gate.check("evaluations/structure", not errors, str(errors))
     gate.check("evaluations/count", count >= 80, str(count))
     gate.check("evaluations/critical-count", critical >= 30, str(critical))
-    gate.metrics.update({"evaluation_cases": count, "critical_evaluation_cases": critical})
+    gate.metrics.update(
+        {"evaluation_cases": count, "critical_evaluation_cases": critical}
+    )
 
 
 def validate_reports(gate: Gate) -> None:
     missing = sorted(name for name in EXPECTED_REPORTS if not (REPORTS / name).is_file())
-    empty = sorted(name for name in EXPECTED_REPORTS if (REPORTS / name).is_file() and (REPORTS / name).stat().st_size < 500)
+    empty = sorted(
+        name
+        for name in EXPECTED_REPORTS
+        if (REPORTS / name).is_file() and (REPORTS / name).stat().st_size < 500
+    )
     gate.check("reports/required", not missing, str(missing))
     gate.check("reports/substantive", not empty, str(empty))
 
 
-def verify_official_sources(gate: Gate, validator: Path, spec: Path, provenance: Path) -> None:
+def verify_official_sources(
+    gate: Gate,
+    validator: Path,
+    spec: Path,
+    provenance: Path,
+) -> None:
     try:
         record = load_json(provenance)
     except Exception as exc:
         gate.errors.append(f"validator provenance: {exc}")
         return
     gate.check("official/commit", record.get("commit") == OPENAI_COMMIT, str(record.get("commit")))
-    gate.check("official/validator-blob", git_blob_sha(validator.read_bytes()) == QUICK_VALIDATE_BLOB, git_blob_sha(validator.read_bytes()))
-    gate.check("official/spec-blob", git_blob_sha(spec.read_bytes()) == SKILL_CREATOR_BLOB, git_blob_sha(spec.read_bytes()))
-    completed = subprocess.run([sys.executable, str(validator), str(SKILL)], text=True, capture_output=True, timeout=60)
-    gate.check("official/quick-validate", completed.returncode == 0, (completed.stdout + completed.stderr).strip())
-    gate.metrics["official_validator_output"] = (completed.stdout + completed.stderr).strip()
+    gate.check(
+        "official/validator-blob",
+        git_blob_sha(validator.read_bytes()) == QUICK_VALIDATE_BLOB,
+        git_blob_sha(validator.read_bytes()),
+    )
+    gate.check(
+        "official/spec-blob",
+        git_blob_sha(spec.read_bytes()) == SKILL_CREATOR_BLOB,
+        git_blob_sha(spec.read_bytes()),
+    )
+    completed = subprocess.run(
+        [sys.executable, str(validator), str(SKILL)],
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    output = (completed.stdout + completed.stderr).strip()
+    gate.check("official/quick-validate", completed.returncode == 0, output)
+    gate.metrics["official_validator_output"] = output
 
 
 def portable_member(name: str) -> str | None:
@@ -404,24 +566,38 @@ def portable_member(name: str) -> str | None:
     return None
 
 
-def build_zip(destination: Path, files: list[Path]) -> None:
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for path in files:
-            relative = path.relative_to(SKILL).as_posix()
+def build_zip(
+    destination: Path,
+    snapshot: list[tuple[str, bytes, int]],
+) -> None:
+    with zipfile.ZipFile(
+        destination,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as archive:
+        for relative, data, mode in snapshot:
             name = f"conduct-cs-research/{relative}"
             info = zipfile.ZipInfo(name, ZIP_EPOCH)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3
-            mode = 0o755 if path.suffix == ".py" else 0o644
             info.external_attr = (stat.S_IFREG | mode) << 16
-            archive.writestr(info, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+            archive.writestr(
+                info,
+                data,
+                compress_type=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            )
 
 
-def validate_zip(path: Path, expected_files: list[Path]) -> list[str]:
+def validate_zip(
+    path: Path,
+    snapshot: list[tuple[str, bytes, int]],
+) -> list[str]:
     errors: list[str] = []
     names: set[str] = set()
     aliases: set[str] = set()
-    expected = {f"conduct-cs-research/{item.relative_to(SKILL).as_posix()}" for item in expected_files}
+    expected = {f"conduct-cs-research/{relative}" for relative, _, _ in snapshot}
     with zipfile.ZipFile(path) as archive:
         if archive.testzip() is not None:
             errors.append("archive CRC failure")
@@ -444,11 +620,18 @@ def validate_zip(path: Path, expected_files: list[Path]) -> list[str]:
             if info.compress_size and info.file_size / info.compress_size > 200:
                 errors.append(f"excessive compression ratio: {info.filename}")
         if names != expected:
-            errors.append(f"archive file set differs: missing={sorted(expected - names)}, extra={sorted(names - expected)}")
+            errors.append(
+                "archive file set differs: "
+                f"missing={sorted(expected - names)}, extra={sorted(names - expected)}"
+            )
     return errors
 
 
-def extract_and_compare(archive_path: Path, expected_files: list[Path], output: Path) -> Path:
+def extract_and_compare(
+    archive_path: Path,
+    snapshot: list[tuple[str, bytes, int]],
+    output: Path,
+) -> Path:
     skill_out = output / "conduct-cs-research"
     with zipfile.ZipFile(archive_path) as archive:
         for info in archive.infolist():
@@ -457,10 +640,13 @@ def extract_and_compare(archive_path: Path, expected_files: list[Path], output: 
             target = output.joinpath(*PurePosixPath(info.filename).parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(archive.read(info))
-    expected = {item.relative_to(SKILL).as_posix(): item.read_bytes() for item in expected_files}
-    actual = {item.relative_to(skill_out).as_posix(): item.read_bytes() for item in collect_files(skill_out)}
+    expected = {relative: data for relative, data, _ in snapshot}
+    actual = {
+        item.relative_to(skill_out).as_posix(): item.read_bytes()
+        for item in collect_files(skill_out)
+    }
     if actual != expected:
-        raise RuntimeError("clean extraction differs byte-for-byte from source")
+        raise RuntimeError("clean extraction differs byte-for-byte from source snapshot")
     return skill_out
 
 
@@ -472,20 +658,54 @@ def clean_release_directory() -> None:
     RELEASE.mkdir()
 
 
-def write_release(gate: Gate, archive_bytes: bytes, files: list[Path], test_results: dict[str, Any]) -> None:
+def write_release(
+    gate: Gate,
+    archive_bytes: bytes,
+    snapshot: list[tuple[str, bytes, int]],
+    test_results: dict[str, Any],
+) -> None:
     clean_release_directory()
     archive = RELEASE / ARCHIVE_NAME
     archive.write_bytes(archive_bytes)
-    digest = hashlib.sha256(archive_bytes).hexdigest()
-    (RELEASE / f"{ARCHIVE_NAME}.sha256").write_text(f"{digest}  {ARCHIVE_NAME}\n", encoding="utf-8")
-    gate.metrics.update({"archive_name": ARCHIVE_NAME, "archive_sha256": digest, "archive_bytes": len(archive_bytes), "archive_members": len(files), "tests": test_results})
-    record = {"passed": not gate.errors, "errors": gate.errors, "warnings": gate.warnings, "metrics": gate.metrics, "checks": gate.checks}
-    (RELEASE / "validation.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    lines = ["PASS" if not gate.errors else "FAIL", f"Errors: {len(gate.errors)}", f"Warnings: {len(gate.warnings)}", f"Archive: {ARCHIVE_NAME}", f"SHA-256: {digest}", f"Tests: {test_results.get('tests_run', 0)}"]
+    digest = sha256_bytes(archive_bytes)
+    (RELEASE / f"{ARCHIVE_NAME}.sha256").write_text(
+        f"{digest}  {ARCHIVE_NAME}\n", encoding="utf-8"
+    )
+    gate.metrics.update(
+        {
+            "archive_name": ARCHIVE_NAME,
+            "archive_sha256": digest,
+            "archive_bytes": len(archive_bytes),
+            "archive_members": len(snapshot),
+            "tests": test_results,
+        }
+    )
+    record = {
+        "passed": not gate.errors,
+        "errors": gate.errors,
+        "warnings": gate.warnings,
+        "metrics": gate.metrics,
+        "checks": gate.checks,
+    }
+    (RELEASE / "validation.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    lines = [
+        "PASS" if not gate.errors else "FAIL",
+        f"Errors: {len(gate.errors)}",
+        f"Warnings: {len(gate.warnings)}",
+        f"Archive: {ARCHIVE_NAME}",
+        f"SHA-256: {digest}",
+        f"Tests: {test_results.get('tests_run', 0)}",
+    ]
     (RELEASE / "validation.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    manifest = {item.relative_to(SKILL).as_posix(): {"sha256": sha256(item), "bytes": item.stat().st_size} for item in files}
-    (RELEASE / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (RELEASE / "release-ready.txt").write_text(f"PASS\n{ARCHIVE_NAME}\n{digest}\n", encoding="utf-8")
+    (RELEASE / "manifest.json").write_text(
+        json.dumps(snapshot_manifest(snapshot), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (RELEASE / "release-ready.txt").write_text(
+        f"PASS\n{ARCHIVE_NAME}\n{digest}\n", encoding="utf-8"
+    )
     for name in sorted(EXPECTED_REPORTS):
         shutil.copyfile(REPORTS / name, RELEASE / name)
     for path in sorted(EVALS.iterdir()):
@@ -511,31 +731,89 @@ def main() -> int:
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--official-validator", type=Path)
     parser.add_argument("--skill-creator-spec", type=Path)
-    parser.add_argument("--provenance", type=Path, default=ROOT / "tools/vendor/openai-skill-creator/provenance.json")
+    parser.add_argument(
+        "--provenance",
+        type=Path,
+        default=ROOT / "tools/vendor/openai-skill-creator/provenance.json",
+    )
     args = parser.parse_args()
     gate = Gate()
     files = validate_source(gate)
     if gate.errors:
-        print(json.dumps({"passed": False, "errors": gate.errors, "warnings": gate.warnings, "metrics": gate.metrics}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "passed": False,
+                    "errors": gate.errors,
+                    "warnings": gate.warnings,
+                    "metrics": gate.metrics,
+                },
+                indent=2,
+            )
+        )
         return 1
     try:
+        validated_snapshot = capture_snapshot(files)
         tests_zero = run_tests(SKILL, "0")
         tests_random = run_tests(SKILL, "123456789")
     except Exception as exc:
         gate.errors.append(str(exc))
         print(json.dumps({"passed": False, "errors": gate.errors}, indent=2))
         return 1
-    gate.check("tests/source-two-hash-seeds", tests_zero["successful"] and tests_random["successful"])
+    gate.check(
+        "tests/source-two-hash-seeds",
+        tests_zero["successful"] and tests_random["successful"],
+    )
     gate.metrics["source_tests_seed_0"] = tests_zero
     gate.metrics["source_tests_seed_random"] = tests_random
     if args.check_only:
-        print(json.dumps({"passed": not gate.errors, "errors": gate.errors, "warnings": gate.warnings, "metrics": gate.metrics, "checks": gate.checks}, indent=2, sort_keys=True))
+        current_snapshot = capture_snapshot(files)
+        gate.check(
+            "source/stable-through-check-only",
+            current_snapshot == validated_snapshot,
+        )
+        print(
+            json.dumps(
+                {
+                    "passed": not gate.errors,
+                    "errors": gate.errors,
+                    "warnings": gate.warnings,
+                    "metrics": gate.metrics,
+                    "checks": gate.checks,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0 if not gate.errors else 1
     if not args.official_validator or not args.skill_creator_spec:
-        gate.errors.append("packaging requires the pinned official validator and skill-creator specification")
+        gate.errors.append(
+            "packaging requires the pinned official validator and skill-creator specification"
+        )
         print(json.dumps({"passed": False, "errors": gate.errors}, indent=2))
         return 1
-    verify_official_sources(gate, args.official_validator, args.skill_creator_spec, args.provenance)
+    verify_official_sources(
+        gate,
+        args.official_validator,
+        args.skill_creator_spec,
+        args.provenance,
+    )
+    post_gate = Gate()
+    post_files = validate_source(post_gate)
+    gate.check(
+        "source/post-test-revalidation",
+        not post_gate.errors and post_files == files,
+        str(post_gate.errors),
+    )
+    try:
+        final_snapshot = capture_snapshot(files)
+    except Exception as exc:
+        gate.errors.append(str(exc))
+        final_snapshot = []
+    gate.check(
+        "source/stable-through-validation",
+        final_snapshot == validated_snapshot,
+    )
     if gate.errors:
         print(json.dumps({"passed": False, "errors": gate.errors}, indent=2))
         return 1
@@ -544,23 +822,47 @@ def main() -> int:
             temp = Path(td)
             first = temp / "first.zip"
             second = temp / "second.zip"
-            build_zip(first, files)
-            build_zip(second, files)
-            gate.check("archive/deterministic-dual-build", first.read_bytes() == second.read_bytes())
-            archive_errors = validate_zip(first, files)
+            build_zip(first, validated_snapshot)
+            build_zip(second, validated_snapshot)
+            gate.check(
+                "archive/deterministic-dual-build",
+                first.read_bytes() == second.read_bytes(),
+            )
+            archive_errors = validate_zip(first, validated_snapshot)
             gate.check("archive/structure", not archive_errors, str(archive_errors))
-            extracted = extract_and_compare(first, files, temp / "extract")
+            extracted = extract_and_compare(first, validated_snapshot, temp / "extract")
             clean_tests = run_tests(extracted, "0")
             gate.check("tests/clean-extraction", clean_tests["successful"])
             gate.metrics["clean_extraction_tests"] = clean_tests
             if gate.errors:
                 raise RuntimeError("release gate failed before emission")
-            write_release(gate, first.read_bytes(), files, clean_tests)
+            write_release(gate, first.read_bytes(), validated_snapshot, clean_tests)
     except Exception as exc:
         gate.errors.append(str(exc))
-        print(json.dumps({"passed": False, "errors": gate.errors, "warnings": gate.warnings, "metrics": gate.metrics}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "passed": False,
+                    "errors": gate.errors,
+                    "warnings": gate.warnings,
+                    "metrics": gate.metrics,
+                },
+                indent=2,
+            )
+        )
         return 1
-    print(json.dumps({"passed": True, "errors": [], "warnings": gate.warnings, "metrics": gate.metrics}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "passed": True,
+                "errors": [],
+                "warnings": gate.warnings,
+                "metrics": gate.metrics,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
