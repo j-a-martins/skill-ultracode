@@ -140,10 +140,14 @@ def audit_search_mode(
         if not claims["manuscript"]:
             errors.append("synthesis stage requires an evidence-linked active claim")
         check_flow(root, search_sets, errors)
-    if stage_at_least(mode, stage, "internal-review") and not nonempty_without_placeholder(
-        root / "evidence/search-audit.md"
-    ):
-        errors.append("internal-review stage requires a completed search audit")
+    if stage_at_least(mode, stage, "internal-review"):
+        if not nonempty_without_placeholder(root / "evidence/search-audit.md"):
+            errors.append("internal-review stage requires a completed search audit")
+        if claims["needs_review"]:
+            errors.append(
+                "internal-review search stage has claims still marked needs-review: "
+                f"{sorted(claims['needs_review'])}"
+            )
 
 
 def audit_peer_mode(
