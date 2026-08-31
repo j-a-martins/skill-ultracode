@@ -15,6 +15,7 @@ from _common import (
     ValidationError,
     load_json,
     scan_tree,
+    split_ids,
 )
 from _project_model import (
     COMMON_FILES,
@@ -79,6 +80,12 @@ def _validate_mode_state(
     return mode, stage
 
 
+def _screening_key(row: dict[str, str]) -> tuple[str, int, str]:
+    stage_order = {"title-abstract": 0, "full-text": 1}
+    stage = row.get("stage", "").strip().lower()
+    return (row.get("record_id", "").strip(), stage_order.get(stage, 2), stage)
+
+
 def _load_tables(
     root: Path, mode: str, errors: list[str]
 ) -> dict[str, list[dict[str, str]]]:
@@ -88,8 +95,29 @@ def _load_tables(
     tables: dict[str, list[dict[str, str]]] = {}
     for relative in CSV_REQUIREMENTS:
         if (root / relative).exists():
-            tables[relative] = load_table(root, relative, errors)
+            rows = load_table(root, relative, errors)
+            if relative == "evidence/screening.csv":
+                rows.sort(key=_screening_key)
+            tables[relative] = rows
     return tables
+
+
+def _check_screening_source_consistency(
+    rows: list[dict[str, str]], errors: list[str]
+) -> None:
+    by_record: dict[str, dict[str, set[str]]] = {}
+    for index, row in enumerate(rows, start=2):
+        record_id = row.get("record_id", "").strip()
+        stage = row.get("stage", "").strip().lower()
+        if not record_id or stage not in {"title-abstract", "full-text"}:
+            continue
+        by_record.setdefault(record_id, {})[stage] = set(split_ids(row.get("source_ids", "")))
+    for record_id, stages in sorted(by_record.items()):
+        if {"title-abstract", "full-text"} <= set(stages):
+            if stages["title-abstract"] != stages["full-text"]:
+                errors.append(
+                    f"screening record {record_id!r} changes source_ids between title-abstract and full-text stages"
+                )
 
 
 def _validate_records(
@@ -101,6 +129,9 @@ def _validate_records(
 ) -> dict[str, Any]:
     source_ids, sources = check_sources(
         root, tables.get("evidence/sources.csv", []), errors, warnings
+    )
+    _check_screening_source_consistency(
+        tables.get("evidence/screening.csv", []), errors
     )
     search_sets = check_search(root, tables, source_ids, errors, warnings)
     run_ids, runs = check_runs(root, tables.get("study/runs.csv", []), errors)
