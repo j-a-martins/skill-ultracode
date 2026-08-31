@@ -23,10 +23,13 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Compile runtime scripts
+      - name: Compile runtime scripts outside the skill tree
+        env:
+          PYTHONPYCACHEPREFIX: /tmp/conduct-cs-research-pycache
         run: python -B -m py_compile deliverables/conduct-cs-research-integrated-2026-08-30/conduct-cs-research/scripts/*.py
       - name: Run external regression suite
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPYCACHEPREFIX: /tmp/conduct-cs-research-test-pycache
           SKILL_UNDER_TEST: ${{ github.workspace }}/deliverables/conduct-cs-research-integrated-2026-08-30/conduct-cs-research
         run: python -B deliverables/conduct-cs-research-integrated-2026-08-30/tools/tests/test_skill.py
