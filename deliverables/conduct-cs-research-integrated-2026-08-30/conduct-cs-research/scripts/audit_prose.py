@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable
 
-from _common import ValidationError, read_text
+from _common import ValidationError, has_placeholder, read_text
 
 NUMBER_RE = re.compile(
     r"(?<![\w.+\-−–—])(?:[+\-−]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][+\-−]?\d+)?(?:\s*%)?)(?!\w|\.\d)"
@@ -54,6 +54,13 @@ SEMANTIC_CATEGORIES: dict[str, re.Pattern[str]] = {
     "universal": re.compile(r"(?i)\b(?:all|every|everyone|always|none|never|universally)\b"),
     "restrictive": re.compile(r"(?i)\b(?:only|solely|exclusively|limited to|restricted to)\b"),
 }
+SEMANTIC_EVENTS = {
+    **SEMANTIC_CATEGORIES,
+    "negation": NEGATION_RE,
+    "uncertainty": UNCERTAINTY_RE,
+    "strong-causal": STRONG_CAUSAL_RE,
+    "certainty": CERTAINTY_RE,
+}
 
 
 def _trim_url(value: str) -> str:
@@ -95,6 +102,20 @@ def category_counts(text: str) -> Counter[str]:
     return Counter({name: len(pattern.findall(text)) for name, pattern in SEMANTIC_CATEGORIES.items()})
 
 
+def semantic_event_sequence(text: str) -> list[str]:
+    events: list[tuple[int, int, str]] = []
+    for name, pattern in SEMANTIC_EVENTS.items():
+        for match in pattern.finditer(text):
+            events.append((match.start(), match.end(), name))
+    events.sort()
+    return [name for _, _, name in events]
+
+
+def semantic_paragraph_signatures(text: str) -> list[list[str]]:
+    paragraphs = [part for part in re.split(r"\n\s*\n", text) if part.strip()]
+    return [semantic_event_sequence(paragraph) for paragraph in paragraphs]
+
+
 def citation_paragraphs(text: str) -> dict[str, list[int]]:
     mapping: dict[str, list[int]] = defaultdict(list)
     paragraphs = [part for part in re.split(r"\n\s*\n", text) if part.strip()]
@@ -106,15 +127,41 @@ def citation_paragraphs(text: str) -> dict[str, list[int]]:
     return dict(mapping)
 
 
-def audit(original_path: Path, revised_path: Path, *, strict: bool = False) -> dict[str, object]:
-    errors: list[str] = []
-    warnings: list[str] = []
-    try:
-        original = read_text(original_path)
-        revised = read_text(revised_path)
-    except ValidationError as exc:
-        return {"passed": False, "errors": [str(exc)], "warnings": [], "metrics": {}}
+def parse_protected_spans(text: str) -> list[str]:
+    if has_placeholder(text):
+        raise ValidationError("protected-spans record contains a placeholder")
+    spans: list[str] = []
+    declared_none = False
+    for line in text.splitlines():
+        value = line.strip()
+        if not value or value.startswith("#"):
+            continue
+        if value.casefold() == "none":
+            declared_none = True
+            continue
+        spans.append(value)
+    if declared_none and spans:
+        raise ValidationError("protected-spans record mixes None with literal spans")
+    if len(spans) != len(set(spans)):
+        raise ValidationError("protected-spans record contains duplicates")
+    return spans
 
+
+def protected_span_errors(original: str, revised: str, spans: list[str]) -> list[str]:
+    errors: list[str] = []
+    for span in spans:
+        original_count = original.count(span)
+        revised_count = revised.count(span)
+        if original_count == 0:
+            errors.append(f"protected span is absent from the original: {span!r}")
+        elif revised_count != original_count:
+            errors.append(
+                f"protected span count changed for {span!r}: {original_count} -> {revised_count}"
+            )
+    return errors
+
+
+def _protected_token_checks(original: str, revised: str, errors: list[str]) -> None:
     delta("numbers", items(NUMBER_RE, original), items(NUMBER_RE, revised), errors)
     delta("units", items(UNIT_RE, original), items(UNIT_RE, revised), errors)
     delta("comparison operators", items(OPERATOR_RE, original), items(OPERATOR_RE, revised), errors)
@@ -127,57 +174,73 @@ def audit(original_path: Path, revised_path: Path, *, strict: bool = False) -> d
     delta("DOIs", items(DOI_RE, original, normalize=_trim_doi), items(DOI_RE, revised, normalize=_trim_doi), errors)
     delta("URLs", items(URL_RE, original, normalize=_trim_url), items(URL_RE, revised, normalize=_trim_url), errors)
 
-    semantic_original = category_counts(original)
-    semantic_revised = category_counts(revised)
-    changed_categories = {
-        name: (semantic_original[name], semantic_revised[name])
+
+def _semantic_checks(
+    original: str,
+    revised: str,
+    strict: bool,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    original_counts = category_counts(original)
+    revised_counts = category_counts(revised)
+    changed = {
+        name: (original_counts[name], revised_counts[name])
         for name in SEMANTIC_CATEGORIES
-        if semantic_original[name] != semantic_revised[name]
+        if original_counts[name] != revised_counts[name]
     }
     direction_names = {"upward", "downward", "positive", "negative", "before", "after", "supports", "contradicts", "significant"}
-    directional = {name: counts for name, counts in changed_categories.items() if name in direction_names}
-    scoped = {name: counts for name, counts in changed_categories.items() if name not in direction_names}
+    directional = {name: counts for name, counts in changed.items() if name in direction_names}
+    scoped = {name: counts for name, counts in changed.items() if name not in direction_names}
     if directional:
         errors.append(f"directional or evidential language changed: {directional}")
     if scoped:
-        message = f"conditional or scope markers changed: {scoped}"
+        (errors if strict else warnings).append(f"conditional or scope markers changed: {scoped}")
+
+    original_events = semantic_event_sequence(original)
+    revised_events = semantic_event_sequence(revised)
+    if original_events != revised_events:
+        message = "ordered semantic-event sequence changed; inspect which claim owns each direction, hedge, negation, or causal term"
+        (errors if strict else warnings).append(message)
+    elif semantic_paragraph_signatures(original) != semantic_paragraph_signatures(revised):
+        message = "semantic markers moved between paragraphs; inspect local claim ownership"
         (errors if strict else warnings).append(message)
 
-    original_neg = len(NEGATION_RE.findall(original))
-    revised_neg = len(NEGATION_RE.findall(revised))
-    if original_neg != revised_neg:
-        message = f"negation count changed from {original_neg} to {revised_neg}; inspect polarity manually"
-        (errors if strict else warnings).append(message)
+    checks = (
+        ("negation", NEGATION_RE, "count changed; inspect polarity manually"),
+        ("uncertainty", UNCERTAINTY_RE, "markers decreased",),
+        ("strong causal or proof", STRONG_CAUSAL_RE, "verbs increased"),
+        ("certainty", CERTAINTY_RE, "markers increased"),
+    )
+    for label, pattern, suffix in checks:
+        before = len(pattern.findall(original))
+        after = len(pattern.findall(revised))
+        concerning = before != after if label == "negation" else after > before if label in {"strong causal or proof", "certainty"} else after < before
+        if concerning:
+            (errors if strict else warnings).append(f"{label} {suffix}: {before} -> {after}")
 
-    original_uncertainty = len(UNCERTAINTY_RE.findall(original))
-    revised_uncertainty = len(UNCERTAINTY_RE.findall(revised))
-    if revised_uncertainty < original_uncertainty:
-        message = f"uncertainty markers decreased from {original_uncertainty} to {revised_uncertainty}"
-        (errors if strict else warnings).append(message)
 
-    original_causal = len(STRONG_CAUSAL_RE.findall(original))
-    revised_causal = len(STRONG_CAUSAL_RE.findall(revised))
-    if revised_causal > original_causal:
-        message = f"strong causal or proof verbs increased from {original_causal} to {revised_causal}"
-        (errors if strict else warnings).append(message)
+def audit_text(
+    original: str,
+    revised: str,
+    *,
+    strict: bool = False,
+    protected_spans: list[str] | None = None,
+) -> dict[str, object]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    _protected_token_checks(original, revised, errors)
+    errors.extend(protected_span_errors(original, revised, protected_spans or []))
+    _semantic_checks(original, revised, strict, errors, warnings)
 
-    original_certainty = len(CERTAINTY_RE.findall(original))
-    revised_certainty = len(CERTAINTY_RE.findall(revised))
-    if revised_certainty > original_certainty:
-        message = f"certainty markers increased from {original_certainty} to {revised_certainty}"
-        (errors if strict else warnings).append(message)
-
-    citation_locations_before = citation_paragraphs(original)
-    citation_locations_after = citation_paragraphs(revised)
-    if citation_locations_before != citation_locations_after:
-        message = "citation paragraph placement changed; inspect citation scope manually"
-        (errors if strict else warnings).append(message)
-
-    macro_before = items(TEX_MACRO_RE, original)
-    macro_after = items(TEX_MACRO_RE, revised)
-    if macro_before != macro_after:
-        message = "LaTeX macro inventory changed outside explicitly protected citation/reference commands"
-        (errors if strict else warnings).append(message)
+    if citation_paragraphs(original) != citation_paragraphs(revised):
+        (errors if strict else warnings).append(
+            "citation paragraph placement changed; inspect citation scope manually"
+        )
+    if items(TEX_MACRO_RE, original) != items(TEX_MACRO_RE, revised):
+        (errors if strict else warnings).append(
+            "LaTeX macro inventory changed outside explicitly protected citation/reference commands"
+        )
 
     metrics = {
         "original_characters": len(original),
@@ -185,19 +248,42 @@ def audit(original_path: Path, revised_path: Path, *, strict: bool = False) -> d
         "original_words": len(re.findall(r"\b\w+\b", original)),
         "revised_words": len(re.findall(r"\b\w+\b", revised)),
         "strict_semantics": strict,
+        "protected_spans": len(protected_spans or []),
         "manual_review_required": bool(warnings),
     }
     return {"passed": not errors, "errors": errors, "warnings": warnings, "metrics": metrics}
+
+
+def audit(
+    original_path: Path,
+    revised_path: Path,
+    *,
+    strict: bool = False,
+    protected_spans_path: Path | None = None,
+) -> dict[str, object]:
+    try:
+        original = read_text(original_path)
+        revised = read_text(revised_path)
+        spans = parse_protected_spans(read_text(protected_spans_path)) if protected_spans_path else []
+    except ValidationError as exc:
+        return {"passed": False, "errors": [str(exc)], "warnings": [], "metrics": {}}
+    return audit_text(original, revised, strict=strict, protected_spans=spans)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("original", type=Path)
     parser.add_argument("revised", type=Path)
+    parser.add_argument("--protected-spans", type=Path)
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
-    result = audit(args.original.expanduser(), args.revised.expanduser(), strict=args.strict)
+    result = audit(
+        args.original.expanduser(),
+        args.revised.expanduser(),
+        strict=args.strict,
+        protected_spans_path=args.protected_spans.expanduser() if args.protected_spans else None,
+    )
     if args.as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
