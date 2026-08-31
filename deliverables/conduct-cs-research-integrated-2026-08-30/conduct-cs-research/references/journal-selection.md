@@ -1,140 +1,58 @@
-# Journal selection, Q1 evidence, and portfolio decisions
+# Journal selection and category-specific Q1 evidence
 
 ## Contents
 
-1. Separate fit from ranking
-2. Build the candidate set
-3. Verify current journal facts
-4. Record Q1 evidence without overclaiming
-5. Score fit and choose a destination
-6. Check integrity and operational constraints
-7. Plan a portfolio
-8. Failure modes
+1. Separate fit and ranking
+2. Verify current facts
+3. Record ranking evidence
+4. Select an exact destination
+5. Portfolio and failure modes
 
-## Separate fit from ranking
+## Separate fit and ranking
 
-Treat journal selection as a scientific and operational decision. Do not use quartile, impact factor, or prestige as a substitute for scope, methods, audience, article type, editorial practice, and reproducibility fit.
+Treat scientific fit and ranking evidence as different judgments. Fit covers contribution, methods, audience, article type, editorial practice, and open-science expectations. Ranking evidence asks whether one provider, metric year, and exact subject category place one identified journal in Q1. A poor-fit Q1 journal remains a poor destination.
 
-Maintain two distinct judgments:
+Build a bounded candidate set from journals publishing nearest work, serving the intended audience, accepting the study family and article type, and imposing policies the project can meet. Check recent relevant articles; do not rely on title keywords or unverified lists.
 
-- **scientific fit** — whether the journal publishes this contribution, study family, article type, and level of evidence;
-- **ranking evidence** — whether an identified provider, metric year, and exact subject category place the journal in Q1.
+## Verify current facts
 
-A poor-fit Q1 journal remains a poor choice. A strong-fit journal without a complete Q1 evidence record must not be represented as verified Q1.
+Use current official journal, publisher, ranking-provider, and submission-system sources. Record access dates. Verify exact journal title and ISSN, scope and exclusions, article types, manuscript limits, review model, data/code/ethics/authorship/AI policies, access routes and fees, preprint and prior-publication rules, submission system, and current ranking fields.
 
-## Build the candidate set
+Retain conflicts and prefer the source responsible for the fact. Ask the journal when ambiguity controls eligibility.
 
-Generate a bounded candidate set from:
+## Record ranking evidence
 
-- journals publishing the nearest prior work;
-- journals explicitly covering the contribution and method;
-- journals serving the intended audience;
-- journals accepting the required article type and manuscript scale;
-- journals whose data, code, ethics, reporting, and artifact policies the project can meet;
-- legitimate alternatives for different contribution framings.
+A local Q1 observation requires:
 
-Do not recommend a journal solely because its title contains a keyword or because it appears on an unverified list. Check recent relevant articles and current scope.
-
-## Verify current journal facts
-
-Use current official journal, publisher, indexing-provider, and submission-system sources. Record the access date. Verify at least:
-
-- exact title, ISSN, publisher, and official journal page;
-- scope, exclusions, article types, and recent relevant content;
-- manuscript, abstract, figure, table, reference, and supplementary limits;
-- peer-review and anonymity model;
-- data, code, materials, ethics, consent, conflict, authorship, and AI-use policies;
-- open-access routes, mandatory or optional charges, waivers, and licensing;
-- preprint, prior-publication, conference-extension, and duplicate-submission policy;
-- submission system and required metadata;
-- current ranking provider, metric name, metric year, exact category, quartile, rank, and denominator when available.
-
-If facts conflict, retain the conflict and prefer the source responsible for that fact. Ask the journal when an ambiguity controls submission eligibility.
-
-## Record Q1 evidence without overclaiming
-
-A Q1 statement must identify:
-
-- journal and ISSN;
-- provider, such as Journal Citation Reports, CiteScore/Scopus, or SCImago Journal Rank;
-- metric name and metric year;
-- exact subject category;
-- quartile;
-- rank and denominator when available;
+- journal and checksum-valid ISSN;
+- provider and metric name;
+- metric year and exact category;
+- quartile, with rank and denominator together when available;
 - a journal-specific authoritative HTTPS record;
 - verification date;
-- a local evidence capture and SHA-256;
-- the person who checked the record and a timezone-aware verification timestamp.
+- local evidence bytes and SHA-256;
+- human verifier and timezone-aware verification time.
 
-Save the provider page or a lawful local capture under the same directory as `publication/journals.csv`, then record its relative path and hash. Do not use a general provider homepage, a search-result snippet, an aggregator, a marketing page, or a manually typed list as journal-specific evidence.
+Do not use a provider homepage, search snippet, aggregator, marketing page, or manually typed list as the evidence record. Multiple category observations for one journal are valid separate rows. Keep fit fields identical across those rows.
 
-The local scorer checks structural completeness, provider-domain plausibility, age, category specificity, and evidence bytes. It does **not** retrieve the provider page, prove that the local capture came from that server, authenticate the verifier, or establish that a licensed database record has not changed. Describe its result as a **complete local Q1 evidence record**, not cryptographically authenticated remote truth.
+The scorer validates local structure, dates, domain plausibility, ISSN, and evidence bytes. It neither fetches the provider page nor authenticates the remote capture or human verifier. Describe PASS as a complete local evidence record, not cryptographically authenticated remote truth.
 
-Never collapse category-specific results into a timeless scalar label. State, for example, “Q1 under provider P, metric year Y, category C, verified on date D.”
+## Select an exact destination
 
-## Score fit and choose a destination
+Use `scripts/score_journals.py`; default ordering is scientific fit. `--verified-q1-only` is an explicit eligibility filter, not a score bonus.
 
-Use `scripts/score_journals.py` only after records are populated. Fit fields use a 0–5 scale:
+Write `publication/selected-journal.json` with:
 
-- scope fit;
-- methods fit;
-- audience fit;
-- article-type fit;
-- open-science fit.
+- `journal` and `issn`;
+- `fit_rationale` and timezone-aware `selected_at`;
+- `q1_claim`: `verified`, `provisional`, or `not-claimed`.
 
-The default ranking is scientific fit first. `--verified-q1-only` is an explicit eligibility filter; Q1 is not an implicit score bonus. Review component scores and rationale rather than accepting the total mechanically.
+For `provisional` or `not-claimed`, the journal/ISSN identity may have several category rows. For `verified`, also record the exact `provider`, `metric_year`, `category`, and `evidence_sha256`. That tuple must match one and only one currently verified candidate observation.
 
-For a selected journal, write `publication/selected-journal.json` with:
+Before acting, inspect journal legitimacy, institution or funder recognition, editorial transparency, fee disclosure, indexing claims, correction policy, solicitation legitimacy, article availability, and conflicts with other submissions.
 
-- `journal`;
-- `fit_rationale`;
-- timezone-aware `selected_at`;
-- `q1_claim`: `verified`, `provisional`, or `not-claimed`;
-- when `verified`, the exact provider, metric year, category, and evidence SHA-256 copied from the candidate record.
+## Portfolio and failure modes
 
-A verified claim must match exactly one candidate row and its current evidence bytes.
+Prepare a small ordered portfolio: first choice, close-fit alternative, and conservative alternative. Record fit, ranking-evidence status, reframing cost, fee exposure, policy risks, and extra work. Re-verify before resubmission.
 
-## Check integrity and operational constraints
-
-Before choosing, check:
-
-- whether the journal is recognized by the institution or funder;
-- transparent editorial board and peer-review process;
-- verifiable publisher identity and contact details;
-- realistic indexing claims;
-- fee transparency and waiver policy;
-- retraction, correction, and research-integrity policies;
-- whether special issues or solicitations are legitimate;
-- whether the journal is currently accepting the relevant article type;
-- whether submission creates conflicts with other manuscripts or prior versions.
-
-Do not rely on a single blacklist or whitelist. Investigate the journal itself.
-
-## Plan a portfolio
-
-Prepare a small ordered portfolio:
-
-1. first-choice journal;
-2. close-fit alternative;
-3. conservative alternative.
-
-For each, record fit, Q1 evidence status, required reframing, format cost, fee exposure, policy risks, and likely additional work. Re-verify current facts before any resubmission because policies and rankings can change.
-
-Do not submit simultaneously where prohibited. Do not promise acceptance probabilities unsupported by journal-specific evidence.
-
-## Failure modes
-
-Reject or revise a selection process that:
-
-- optimizes quartile before scope;
-- calls a journal Q1 without provider, year, and category;
-- uses stale, generic, or non-journal-specific evidence;
-- accepts a self-authored evidence file without human source checking;
-- treats a script PASS as remote authentication;
-- ignores article type, methods, or audience mismatch;
-- omits publication charges or policy constraints;
-- predicts acceptance from impact metrics;
-- recommends a journal with unverifiable identity or editorial practices;
-- preserves a Q1 label after the source record or metric year changes.
-
-The final recommendation is a reasoned portfolio decision, not a publication guarantee.
+Reject a process that optimizes quartile before fit, omits ISSN/provider/year/category, collapses category rows into a timeless label, uses stale or generic evidence, treats a local PASS as remote authentication, ignores article-type or methods mismatch, hides fees, predicts acceptance from impact metrics, or preserves a ranking claim after its evidence changes.
