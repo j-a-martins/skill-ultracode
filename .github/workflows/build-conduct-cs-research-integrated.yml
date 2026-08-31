@@ -1,9 +1,9 @@
-name: Build software-engineered conduct-cs-research release
+name: Release resolved conduct-cs-research skill
 
 on:
   push:
     branches:
-      - artifact/conduct-cs-research-software-engineering-20260830
+      - artifact/conduct-cs-research-resolved-20260831
   workflow_dispatch:
 
 permissions:
@@ -11,61 +11,71 @@ permissions:
 
 jobs:
   compatibility:
-    name: Full gate on Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    name: Source gate on Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.10", "3.12", "3.13"]
     steps:
-      - name: Check out software-engineering branch
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
+      - name: Check out resolved branch
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Run complete software-engineering release gate
-        run: python deliverables/conduct-cs-research-integrated-2026-08-30/tools/software_engineering_release.py
+      - name: Run source, architecture, token, evaluation, and two-seed tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPYCACHEPREFIX: /tmp/conduct-cs-research-${{ matrix.python-version }}
+        run: python -B deliverables/conduct-cs-research-integrated-2026-08-30/tools/release.py --check-only
 
   validate-and-package:
     needs: compatibility
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - name: Check out software-engineering branch
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Check out resolved branch
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: Set up exact packaging Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: "3.12"
-
-      - name: Check out pinned OpenAI skill-creator validator
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+          python-version: "3.12.11"
+      - name: Record packaging runtime
+        run: python --version
+      - name: Check out pinned OpenAI skill-creator sources
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           repository: openai/skills
           ref: 49f948faa9258a0c61caceaf225e179651397431
           path: .openai-skills
           persist-credentials: false
-          sparse-checkout: skills/.system/skill-creator/scripts/quick_validate.py
+          sparse-checkout: |
+            skills/.system/skill-creator/SKILL.md
+            skills/.system/skill-creator/scripts/quick_validate.py
           sparse-checkout-cone-mode: false
-
+      - name: Verify pinned OpenAI source identities
+        run: |
+          test "$(git -C .openai-skills rev-parse HEAD)" = "49f948faa9258a0c61caceaf225e179651397431"
+          test "$(git -C .openai-skills hash-object skills/.system/skill-creator/scripts/quick_validate.py)" = "0547b4041a5f58fa19892079a114a1df98286406"
+          test "$(git -C .openai-skills hash-object skills/.system/skill-creator/SKILL.md)" = "72bc0b97e7a6476254a9d5c424c9971748402ec3"
       - name: Install build-only validator dependency
         run: python -m pip install --disable-pip-version-check --no-deps PyYAML==6.0.2
-
-      - name: Run official OpenAI quick validator
+      - name: Run official OpenAI quick validator directly
         run: python .openai-skills/skills/.system/skill-creator/scripts/quick_validate.py deliverables/conduct-cs-research-integrated-2026-08-30/conduct-cs-research
-
-      - name: Run final software-engineering gate and package
-        run: python deliverables/conduct-cs-research-integrated-2026-08-30/tools/software_engineering_release.py
-
+      - name: Run fail-closed release builder
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPYCACHEPREFIX: /tmp/conduct-cs-research-package
+        run: |
+          python -B deliverables/conduct-cs-research-integrated-2026-08-30/tools/release.py \
+            --official-validator .openai-skills/skills/.system/skill-creator/scripts/quick_validate.py \
+            --skill-creator-spec .openai-skills/skills/.system/skill-creator/SKILL.md
       - name: Upload certified release evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: conduct-cs-research-software-engineered-2026-08-30
+          name: conduct-cs-research-software-engineered-2026-08-31
           path: deliverables/conduct-cs-research-integrated-2026-08-30/release/*
           if-no-files-found: error
           retention-days: 30
