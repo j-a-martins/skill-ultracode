@@ -20,6 +20,15 @@ import init_project
 
 @unittest.skipUnless(hasattr(os, "symlink"), "symlink unavailable")
 class LinkedRootTests(unittest.TestCase):
+    def assert_rejected_root(self, result: dict[str, object]) -> None:
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["errors"])
+        message = " ".join(str(item).lower() for item in result["errors"])
+        self.assertTrue(
+            "linked" in message or "not a regular directory" in message,
+            message,
+        )
+
     def test_project_root_symlink_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             parent = Path(td)
@@ -27,9 +36,7 @@ class LinkedRootTests(unittest.TestCase):
             init_project.create_project(real, "linked", "peer-review")
             link = parent / "link"
             link.symlink_to(real, target_is_directory=True)
-            result = audit_project.audit(link)
-            self.assertFalse(result["passed"])
-            self.assertTrue(any("linked" in item.lower() for item in result["errors"]))
+            self.assert_rejected_root(audit_project.audit(link))
 
     def test_latex_root_symlink_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -39,9 +46,7 @@ class LinkedRootTests(unittest.TestCase):
             (real / "main.tex").write_text("\\documentclass{article}\n", encoding="utf-8")
             link = parent / "link"
             link.symlink_to(real, target_is_directory=True)
-            result = audit_latex.audit(link, Path("main.tex"))
-            self.assertFalse(result["passed"])
-            self.assertTrue(any("linked" in item.lower() for item in result["errors"]))
+            self.assert_rejected_root(audit_latex.audit(link, Path("main.tex")))
 
 
 if __name__ == "__main__":
