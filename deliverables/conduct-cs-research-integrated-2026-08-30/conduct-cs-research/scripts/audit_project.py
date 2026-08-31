@@ -189,13 +189,14 @@ def audit(
     errors: list[str] = []
     warnings: list[str] = []
     try:
-        root = root.resolve(strict=True)
+        requested = root.expanduser()
         tree = scan_tree(
-            root,
+            requested,
             max_entries=max_entries,
             max_depth=max_depth,
             max_total_bytes=max_total_bytes,
         )
+        root = requested.resolve(strict=True)
     except (OSError, RuntimeError, ValidationError) as exc:
         return {"passed": False, "errors": [str(exc)], "warnings": [], "metrics": {}}
 
